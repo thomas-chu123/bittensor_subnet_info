@@ -136,7 +136,14 @@ async def get_metagraph_data_async(subtensor: bt.Subtensor, netuid: int) -> Opti
     
     try:
         print(f"開始獲取Subnet {netuid}的metagraph...")
-        metagraph = bt.Metagraph(netuid=netuid, lite=True, network=NETWORK)
+        # bt.Metagraph is synchronous/blocking. Run it in a worker thread so
+        # asyncio.gather/as_completed can fetch multiple subnets concurrently.
+        metagraph = await asyncio.to_thread(
+            bt.Metagraph,
+            netuid=netuid,
+            lite=True,
+            network=NETWORK
+        )
         print(f"成功獲取Subnet {netuid}的metagraph，有{len(metagraph.hotkeys)}個hotkeys")
         
         # 準備數據
