@@ -334,7 +334,7 @@
         // 更新 Registration Cost 顯示
         function updateRegCostDisplay() {
             const maxRegCost = parseFloat(document.getElementById('max-reg-cost-input').value);
-            document.getElementById('reg-cost-value').textContent = maxRegCost.toFixed(2);
+            document.getElementById('reg-cost-value').textContent = maxRegCost.toFixed(4);
         }
 
         // 加載 Subnet 數據（流式）
@@ -484,7 +484,7 @@
 
             if (filtered.length > 0) {
                 const avgInvest = (filtered.reduce((sum, s) => sum + s.invest_value, 0) / filtered.length).toFixed(2);
-                const totalCost = filtered.reduce((sum, s) => sum + s.registration_cost, 0).toFixed(2);
+                const totalCost = filtered.reduce((sum, s) => sum + s.registration_cost, 0).toFixed(4);
 
                 document.getElementById('stat-avg-invest').textContent = avgInvest;
                 document.getElementById('stat-total-cost').textContent = `${totalCost} τ`;

@@ -413,11 +413,11 @@ async def get_all_subnets_data_async(subtensor: bt.Subtensor) -> List[Dict]:
 def format_tao(value: float) -> str:
     """將值格式化為TAO"""
     if value >= 1000:
-        return f"{value / 1000:.2f}k τ"
+        return f"{value / 1000:.4f}k τ"
     elif value >= 1:
-        return f"{value:.2f} τ"
+        return f"{value:.4f} τ"
     else:
-        return f"{value * 1000:.2f}m τ"
+        return f"{value * 1000:.4f}m τ"
 
 
 # ==================== API 路由 ====================
@@ -507,7 +507,7 @@ async def generate_subnets_stream(min_invest_value: float, max_invest_value: flo
         
         # 使用 as_completed 逐個返回完成的任務結果
         update_count = 0
-        async for task in asyncio.as_completed(metagraph_tasks):
+        for task in asyncio.as_completed(metagraph_tasks):
             try:
                 result = await task
                 if result and not isinstance(result, Exception):
