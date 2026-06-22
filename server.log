@@ -1,0 +1,22 @@
+INFO:     Will watch for changes in these directories: ['/Users/skynet/PycharmProjects/bittensor_subnet_info']
+INFO:main:✓ Redis 連接成功
+INFO:main:✓ Redis 連接成功
+ERROR:main:流式API錯誤: TypeError: 'async for' requires an object with __aiter__ method, got generator
+Traceback (most recent call last):
+  File "/Users/skynet/PycharmProjects/bittensor_subnet_info/main.py", line 510, in generate_subnets_stream
+    async for task in asyncio.as_completed(metagraph_tasks):
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: 'async for' requires an object with __aiter__ method, got generator
+/Users/skynet/PycharmProjects/bittensor_subnet_info/.venv/lib/python3.12/site-packages/starlette/responses.py:250: RuntimeWarning: coroutine 'generate_subnets_stream.<locals>.metagraph_with_semaphore' was never awaited
+  async for chunk in self.body_iterator:
+RuntimeWarning: Enable tracemalloc to get the object allocation traceback
+INFO:main:✓ Redis 連接成功
+ERROR:main:流式API錯誤: TypeError: 'async for' requires an object with __aiter__ method, got generator
+Traceback (most recent call last):
+  File "/Users/skynet/PycharmProjects/bittensor_subnet_info/main.py", line 510, in generate_subnets_stream
+    async for task in asyncio.as_completed(metagraph_tasks):
+                      ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+TypeError: 'async for' requires an object with __aiter__ method, got generator
+/Users/skynet/PycharmProjects/bittensor_subnet_info/.venv/lib/python3.12/site-packages/starlette/responses.py:250: RuntimeWarning: coroutine 'generate_subnets_stream.<locals>.metagraph_with_semaphore' was never awaited
+  async for chunk in self.body_iterator:
+RuntimeWarning: Enable tracemalloc to get the object allocation traceback

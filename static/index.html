@@ -1,0 +1,652 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bittensor Subnet 信息儀表盤</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        .loading-spinner {
+            border: 4px solid rgba(59, 130, 246, 0.1);
+            border-top: 4px solid #3b82f6;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        .subnet-card {
+            transition: all 0.3s ease;
+        }
+        
+        .subnet-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1);
+        }
+        
+        .invest-value-badge {
+            display: inline-block;
+            padding: 0.5rem 1rem;
+            border-radius: 0.5rem;
+            font-weight: 600;
+            color: white;
+        }
+        
+        .invest-value-excellent {
+            background: linear-gradient(135deg, #10b981 0%, #059669 100%);
+        }
+        
+        .invest-value-good {
+            background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
+        }
+        
+        .invest-value-medium {
+            background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+        }
+        
+        .invest-range-bar {
+            position: relative;
+            height: 40px;
+            background: linear-gradient(to right, #ef4444, #f59e0b, #3b82f6, #10b981);
+            border-radius: 0.5rem;
+            overflow: hidden;
+            margin-bottom: 0.5rem;
+        }
+        
+        .invest-range-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 0.5rem;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 0.5rem;
+            color: white;
+            font-weight: 600;
+            font-size: 0.75rem;
+            z-index: 1;
+        }
+        
+        .range-input-group {
+            display: flex;
+            gap: 1rem;
+            margin-bottom: 0.5rem;
+        }
+        
+        .range-input-field {
+            flex: 1;
+            background: rgb(51, 65, 85);
+            border: 1px solid rgb(71, 85, 99);
+            border-radius: 0.375rem;
+            padding: 0.5rem;
+            color: rgb(229, 231, 235);
+            text-align: center;
+            font-weight: 600;
+        }
+        
+        .range-input-field:focus {
+            outline: none;
+            border-color: rgb(59, 130, 246);
+            background: rgb(30, 41, 59);
+        }
+    </style>
+</head>
+<body class="bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 text-gray-100">
+    <!-- 導航欄 -->
+    <nav class="bg-slate-900 border-b border-slate-700 sticky top-0 z-50">
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+            <div class="flex justify-between items-center h-16">
+                <div class="flex items-center space-x-3">
+                    <div class="w-8 h-8 bg-blue-500 rounded-lg flex items-center justify-center">
+                        <span class="text-white font-bold">🧠</span>
+                    </div>
+                    <h1 class="text-2xl font-bold bg-gradient-to-r from-blue-400 to-cyan-400 bg-clip-text text-transparent">
+                        Bittensor Subnet 儀表盤
+                    </h1>
+                </div>
+                <div class="text-sm text-gray-400" id="last-update">
+                    最後更新: <span id="update-time">--:--:--</span>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    <!-- 主容器 -->
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        <!-- 控制面板 -->
+        <div class="bg-slate-800 rounded-lg p-6 mb-8 border border-slate-700">
+            <!-- 第一行：投資價值範圍和排序 -->
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6 pb-6 border-b border-slate-700">
+                <!-- 投資價值範圍過濾 -->
+                <div>
+                    <label class="block text-sm font-medium text-gray-300 mb-2">
+                        投資價值範圍 (低風險 ← → 高風險)
+                    </label>
+                    <!-- 可視化範圍條 -->
+                    <div class="invest-range-bar">
+                        <div class="invest-range-overlay">
+                            <span id="range-label-min">低</span>
+                            <span id="range-label-max">高</span>
+                        </div>
+                    </div>
+                    <!-- 範圍輸入框 -->
+                    <div class="range-input-group">
+                        <input 
+                            type="number" 
+                            id="min-invest-value-input" 
+                            min="0" 
+                            max="1" 
+                            step="0.01" 
+                            value="0"
+                            class="range-input-field"
+                            placeholder="最小值"
+                        >
+                        <input 
+                            type="number" 
+                            id="max-invest-value-input" 
+                            min="0" 
+                            max="1" 
+                            step="0.01" 
+                            value="1"
+                            class="range-input-field"
+                            placeholder="最大值"
+                        >
+                    </div>
+                    <div class="text-xs text-gray-400">
+                        顯示範圍: <span id="min-value" class="font-semibold text-blue-400">0.00</span> - <span id="max-value" class="font-semibold text-blue-400">1.00</span>
+                    </div>
+                </div>
+
+                <!-- Registration Cost 過濾 -->
+                <div>
+                    <label class="block text-sm font-medium text-gray-300 mb-2">
+                        Registration Cost 上限 (τ)
+                    </label>
+                    <input 
+                        type="number" 
+                        id="max-reg-cost-input" 
+                        min="0" 
+                        step="0.1" 
+                        value="1000"
+                        class="range-input-field w-full"
+                        placeholder="輸入最大 registration cost"
+                    >
+                    <div class="text-xs text-gray-400 mt-2">
+                        顯示低於: <span id="reg-cost-value" class="font-semibold text-cyan-400">1000.00</span> τ
+                    </div>
+                </div>
+
+                <!-- 排序選項 -->
+                <div>
+                    <label class="block text-sm font-medium text-gray-300 mb-2">
+                        排序方式
+                    </label>
+                    <select 
+                        id="sort-option"
+                        class="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-gray-100 focus:outline-none focus:border-blue-500"
+                    >
+                        <option value="invest_value">投資價值 (高→低)</option>
+                        <option value="registration_cost">Registration Cost (低→高)</option>
+                        <option value="n_validators">Validators 數 (多→少)</option>
+                        <option value="total_stake">總 Stake (高→低)</option>
+                    </select>
+                </div>
+            </div>
+
+            <!-- 第二行：操作按鈕 -->
+            <div class="flex items-center space-x-3">
+                <button 
+                    id="load-data-btn"
+                    class="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded transition duration-200"
+                >
+                    🔄 加載數據
+                </button>
+                <button 
+                    id="export-btn"
+                    class="flex-1 bg-green-600 hover:bg-green-700 text-white font-medium py-2 px-4 rounded transition duration-200"
+                >
+                    📥 導出
+                </button>
+            </div>
+        </div>
+
+        <!-- 統計信息 -->
+        <div id="stats-container" class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
+            <div class="bg-slate-800 rounded-lg p-4 border border-slate-700">
+                <div class="text-gray-400 text-sm">總 Subnet 數</div>
+                <div class="text-3xl font-bold text-blue-400" id="stat-total">--</div>
+            </div>
+            <div class="bg-slate-800 rounded-lg p-4 border border-slate-700">
+                <div class="text-gray-400 text-sm">顯示 Subnet 數</div>
+                <div class="text-3xl font-bold text-green-400" id="stat-filtered">--</div>
+            </div>
+            <div class="bg-slate-800 rounded-lg p-4 border border-slate-700">
+                <div class="text-gray-400 text-sm">平均投資價值</div>
+                <div class="text-3xl font-bold text-yellow-400" id="stat-avg-invest">--</div>
+            </div>
+            <div class="bg-slate-800 rounded-lg p-4 border border-slate-700">
+                <div class="text-gray-400 text-sm">總 Registration Cost</div>
+                <div class="text-3xl font-bold text-cyan-400" id="stat-total-cost">--</div>
+            </div>
+        </div>
+
+        <!-- Subnet 列表容器 -->
+        <div id="loading-indicator" class="flex justify-center items-center py-12">
+            <div class="loading-spinner"></div>
+            <span class="ml-4 text-gray-400">正在加載 Subnet 數據...</span>
+        </div>
+
+        <div id="subnets-container" class="hidden mb-8">
+            <div class="overflow-x-auto rounded-lg border border-slate-700">
+                <table class="w-full text-sm">
+                    <thead class="bg-slate-700 border-b border-slate-600 sticky top-0">
+                        <tr class="text-gray-300 font-semibold">
+                            <th class="px-4 py-3 text-left">Subnet ID</th>
+                            <th class="px-4 py-3 text-center">投資價值</th>
+                            <th class="px-4 py-3 text-right">Registration Cost</th>
+                            <th class="px-4 py-3 text-center">Validators</th>
+                            <th class="px-4 py-3 text-right">Total Stake</th>
+                            <th class="px-4 py-3 text-right">Emissions</th>
+                            <th class="px-4 py-3 text-center">Incentive Mean</th>
+                        </tr>
+                    </thead>
+                    <tbody id="subnets-tbody" class="divide-y divide-slate-700">
+                        <!-- 動態生成的行 -->
+                    </tbody>
+                </table>
+            </div>
+        </div>
+
+        <!-- 錯誤提示 -->
+        <div id="error-container" class="hidden bg-red-900/20 border border-red-500 rounded-lg p-4 mb-8">
+            <div class="text-red-400 font-medium">錯誤</div>
+            <div class="text-red-300 text-sm" id="error-message"></div>
+        </div>
+
+        <!-- 沒有數據提示 -->
+        <div id="no-data-container" class="hidden bg-slate-800 rounded-lg p-12 text-center border border-slate-700">
+            <div class="text-gray-400 text-lg">沒有符合條件的 Subnet</div>
+        </div>
+    </div>
+
+    <!-- 頁腳 -->
+    <footer class="border-t border-slate-700 mt-12 py-6 text-center text-gray-400 text-sm">
+        <p>💡 投資價值 = 1 - Gini係數 | 基於 Incentive 分佈均勻性</p>
+        <p class="mt-2">🔒 Phase 2: SSH 和 RunPod 一鍵部署功能開發中</p>
+    </footer>
+
+    <script>
+        // 全局狀態
+        let allSubnets = [];
+        let displayedSubnets = new Set();  // 追蹤已顯示的 subnet
+        let totalSubnets = 0;
+
+        // 初始化
+        document.addEventListener('DOMContentLoaded', () => {
+            setupEventListeners();
+            loadSubnets();
+            updateTime();
+            setInterval(updateTime, 1000);
+        });
+
+        // 設置事件監聽器
+        function setupEventListeners() {
+            document.getElementById('load-data-btn').addEventListener('click', loadSubnets);
+            document.getElementById('export-btn').addEventListener('click', exportData);
+            document.getElementById('min-invest-value-input').addEventListener('change', updateFilter);
+            document.getElementById('min-invest-value-input').addEventListener('input', updateRangeDisplay);
+            document.getElementById('max-invest-value-input').addEventListener('change', updateFilter);
+            document.getElementById('max-invest-value-input').addEventListener('input', updateRangeDisplay);
+            document.getElementById('max-reg-cost-input').addEventListener('change', updateFilter);
+            document.getElementById('max-reg-cost-input').addEventListener('input', updateRegCostDisplay);
+            document.getElementById('sort-option').addEventListener('change', renderSubnets);
+        }
+
+        // 更新範圍顯示
+        function updateRangeDisplay() {
+            const minValue = parseFloat(document.getElementById('min-invest-value-input').value);
+            const maxValue = parseFloat(document.getElementById('max-invest-value-input').value);
+
+            document.getElementById('min-value').textContent = minValue.toFixed(2);
+            document.getElementById('max-value').textContent = maxValue.toFixed(2);
+
+            // 確保最小值不超過最大值
+            if (minValue > maxValue) {
+                document.getElementById('min-invest-value-input').value = maxValue;
+                document.getElementById('min-value').textContent = maxValue.toFixed(2);
+            }
+            if (maxValue < minValue) {
+                document.getElementById('max-invest-value-input').value = minValue;
+                document.getElementById('max-value').textContent = minValue.toFixed(2);
+            }
+        }
+
+        // 更新 Registration Cost 顯示
+        function updateRegCostDisplay() {
+            const maxRegCost = parseFloat(document.getElementById('max-reg-cost-input').value);
+            document.getElementById('reg-cost-value').textContent = maxRegCost.toFixed(2);
+        }
+
+        // 加載 Subnet 數據（流式）
+        async function loadSubnets() {
+            try {
+                showLoading(true);
+                hideError();
+                allSubnets = [];
+                displayedSubnets.clear();
+                const tbody = document.getElementById('subnets-tbody');
+                tbody.innerHTML = '';
+
+                const minValue = parseFloat(document.getElementById('min-invest-value-input').value);
+                const maxValue = parseFloat(document.getElementById('max-invest-value-input').value);
+
+                const response = await fetch(
+                    `/api/subnets-stream?min_invest_value=${minValue}&max_invest_value=${maxValue}`
+                );
+
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder();
+                let buffer = '';
+                let basicCount = 0;
+
+                showLoading(false);
+                document.getElementById('subnets-container').classList.remove('hidden');
+                document.getElementById('no-data-container').classList.add('hidden');
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+
+                    buffer += decoder.decode(value, { stream: true });
+                    const lines = buffer.split('\n');
+                    buffer = lines.pop();  // 保留未完整的行
+
+                    for (const line of lines) {
+                        if (!line.trim()) continue;
+
+                        try {
+                            const message = JSON.parse(line);
+
+                            if (message.type === 'total') {
+                                totalSubnets = message.count;
+                                document.getElementById('stat-total').textContent = totalSubnets;
+                            } else if (message.type === 'subnet') {
+                                // 基本信息數據
+                                const subnet = message.data;
+                                
+                                // 檢查是否已存在，存在則更新，不存在則添加
+                                const existingIndex = allSubnets.findIndex(s => s.netuid === subnet.netuid);
+                                if (existingIndex >= 0) {
+                                    allSubnets[existingIndex] = { ...allSubnets[existingIndex], ...subnet };
+                                } else {
+                                    allSubnets.push(subnet);
+                                }
+                                
+                                basicCount++;
+                                
+                                // 每 10 個basic subnet或完成時更新表格
+                                if (basicCount % 10 === 0) {
+                                    renderSubnets();
+                                }
+                            } else if (message.type === 'basic_complete') {
+                                // 基本信息完成，最終渲染一次
+                                renderSubnets();
+                                updateStatsDisplay();
+                                console.log('基本信息加載完成，開始加載metagraph數據...');
+                            } else if (message.type === 'subnet_update') {
+                                // Metagraph 更新數據
+                                const updateData = message.data;
+                                const subnetIndex = allSubnets.findIndex(s => s.netuid === updateData.netuid);
+                                if (subnetIndex >= 0) {
+                                    // 更新該 subnet 的數據
+                                    allSubnets[subnetIndex] = { ...allSubnets[subnetIndex], ...updateData };
+                                    // 更新表格中該行的信息
+                                    updateSubnetRowInTable(updateData.netuid, updateData);
+                                    updateStatsDisplay();
+                                }
+                            } else if (message.type === 'complete') {
+                                renderSubnets();
+                                updateStatsDisplay();
+                                console.log('所有數據加載完成');
+                            } else if (message.type === 'error') {
+                                showError(`加載錯誤: ${message.message}`);
+                            }
+                        } catch (e) {
+                            console.warn('解析消息失敗:', line, e);
+                        }
+                    }
+                }
+
+                showLoading(false);
+
+            } catch (error) {
+                console.error('錯誤:', error);
+                showError(`無法加載數據: ${error.message}`);
+                showLoading(false);
+            }
+        }
+
+        // 更新表格中特定 subnet 的行信息
+        function updateSubnetRowInTable(netuid, updateData) {
+            const tbody = document.getElementById('subnets-tbody');
+            const rows = tbody.getElementsByTagName('tr');
+            
+            for (let row of rows) {
+                if (parseInt(row.dataset.netuid) === netuid) {
+                    // 找到對應行，更新其內容
+                    const subnet = allSubnets.find(s => s.netuid === netuid);
+                    if (subnet) {
+                        // 重新創建該行
+                        const newRow = createSubnetRow(subnet);
+                        row.innerHTML = newRow.substring(newRow.indexOf('<td>'), newRow.lastIndexOf('</tr>'));
+                        row.className = newRow.match(/class="[^"]+"/)[0].substring(7).slice(0, -1);
+                        break;
+                    }
+                }
+            }
+        }
+
+        // 添加 Subnet 行到列表（列表模式下不需要逐個插入）
+        function addSubnetCardToDisplay(subnet) {
+            // 在流式加載中自動觸發重新渲染
+            renderSubnets();
+        }
+
+        // 更新過濾條件並重新渲染
+        function updateFilter() {
+            updateRangeDisplay();
+            renderSubnets();
+        }
+
+        // 更新統計信息顯示
+        function updateStatsDisplay() {
+            const minValue = parseFloat(document.getElementById('min-invest-value-input').value);
+            const maxValue = parseFloat(document.getElementById('max-invest-value-input').value);
+
+            const filtered = allSubnets.filter(s => s.invest_value >= minValue && s.invest_value <= maxValue);
+
+            document.getElementById('stat-total').textContent = totalSubnets;
+            document.getElementById('stat-filtered').textContent = filtered.length;
+
+            if (filtered.length > 0) {
+                const avgInvest = (filtered.reduce((sum, s) => sum + s.invest_value, 0) / filtered.length).toFixed(2);
+                const totalCost = filtered.reduce((sum, s) => sum + s.registration_cost, 0).toFixed(2);
+
+                document.getElementById('stat-avg-invest').textContent = avgInvest;
+                document.getElementById('stat-total-cost').textContent = `${totalCost} τ`;
+            }
+        }
+
+        // 重新渲染 Subnet 列表
+        function renderSubnets() {
+            const container = document.getElementById('subnets-container');
+            const tbody = document.getElementById('subnets-tbody');
+            const noDataContainer = document.getElementById('no-data-container');
+            const minValue = parseFloat(document.getElementById('min-invest-value-input').value);
+            const maxValue = parseFloat(document.getElementById('max-invest-value-input').value);
+            const maxRegCost = parseFloat(document.getElementById('max-reg-cost-input').value);
+
+            // 過濾 subnet（投資價值 + Registration Cost）
+            const filtered = allSubnets.filter(subnet =>
+                subnet.invest_value >= minValue && 
+                subnet.invest_value <= maxValue &&
+                subnet.registration_cost <= maxRegCost
+            );
+
+            // 排序
+            const sortOption = document.getElementById('sort-option').value;
+            filtered.sort((a, b) => {
+                switch(sortOption) {
+                    case 'invest_value':
+                        return b.invest_value - a.invest_value;
+                    case 'registration_cost':
+                        return a.registration_cost - b.registration_cost;
+                    case 'n_validators':
+                        return b.n_validators - a.n_validators;
+                    case 'total_stake':
+                        return b.total_stake - a.total_stake;
+                    default:
+                        return 0;
+                }
+            });
+
+            if (filtered.length === 0) {
+                container.classList.add('hidden');
+                noDataContainer.classList.remove('hidden');
+                return;
+            }
+
+            container.classList.remove('hidden');
+            noDataContainer.classList.add('hidden');
+
+            tbody.innerHTML = filtered.map(subnet => createSubnetRow(subnet)).join('');
+        }
+
+        // 創建 Subnet 表格行
+        function createSubnetRow(subnet) {
+            const investBadgeClass = getInvestBadgeClass(subnet.invest_value);
+            const investQuality = getInvestQuality(subnet.invest_value);
+            
+            // 確定行的背景顏色
+            let rowBg = 'hover:bg-slate-700/50';
+            if (subnet.invest_value >= 0.8) rowBg = 'hover:bg-green-900/20';
+            else if (subnet.invest_value >= 0.6) rowBg = 'hover:bg-blue-900/20';
+            else if (subnet.invest_value >= 0.4) rowBg = 'hover:bg-yellow-900/20';
+
+            return `
+                <tr class="text-gray-300 border-slate-700 ${rowBg} transition" data-netuid="${subnet.netuid}">
+                    <td class="px-4 py-3 font-semibold">
+                        <div class="text-white">#${subnet.netuid}</div>
+                        <div class="text-xs text-gray-400">${subnet.name}</div>
+                    </td>
+                    <td class="px-4 py-3 text-center">
+                        <div class="inline-block px-2 py-1 rounded text-sm font-semibold ${investBadgeClass === 'invest-value-excellent' ? 'bg-green-600/30 text-green-300' : investBadgeClass === 'invest-value-good' ? 'bg-blue-600/30 text-blue-300' : investBadgeClass === 'invest-value-medium' ? 'bg-yellow-600/30 text-yellow-300' : 'bg-red-600/30 text-red-300'}">
+                            ${subnet.invest_value.toFixed(2)}
+                        </div>
+                    </td>
+                    <td class="px-4 py-3 text-right text-cyan-400">
+                        ${subnet.registration_cost.toFixed(2)} τ
+                    </td>
+                    <td class="px-4 py-3 text-center text-green-400">
+                        ${subnet.n_validators}
+                    </td>
+                    <td class="px-4 py-3 text-right text-yellow-400">
+                        ${formatTao(subnet.total_stake)}
+                    </td>
+                    <td class="px-4 py-3 text-right text-purple-400">
+                        ${formatTao(subnet.total_emissions)}
+                    </td>
+                    <td class="px-4 py-3 text-center text-blue-400">
+                        ${subnet.incentive_mean.toFixed(4)}
+                    </td>
+                </tr>
+            `;
+        }
+
+        // 獲取投資等級徽章類名
+        function getInvestBadgeClass(value) {
+            if (value >= 0.8) return 'invest-value-excellent';
+            if (value >= 0.6) return 'invest-value-good';
+            if (value >= 0.4) return 'invest-value-medium';
+            return 'invest-value-low';
+        }
+
+        // 獲取投資質量文本
+        function getInvestQuality(value) {
+            if (value >= 0.8) return '🟢 優秀 (低風險)';
+            if (value >= 0.6) return '🟢 良好 (中低風險)';
+            if (value >= 0.4) return '🟡 中等 (中風險)';
+            if (value >= 0.2) return '🟠 偏低 (中高風險)';
+            return '🔴 較低 (高風險)';
+        }
+
+        // 格式化 TAO
+        function formatTao(value) {
+            if (value >= 1000) return `${(value / 1000).toFixed(2)}k τ`;
+            if (value >= 1) return `${value.toFixed(2)} τ`;
+            return `${(value * 1000).toFixed(2)}m τ`;
+        }
+
+        // 導出數據
+        function exportData() {
+            const minValue = parseFloat(document.getElementById('min-invest-value-input').value);
+            const maxValue = parseFloat(document.getElementById('max-invest-value-input').value);
+            
+            const filtered = allSubnets.filter(s => s.invest_value >= minValue && s.invest_value <= maxValue);
+            const json = JSON.stringify(filtered, null, 2);
+            const blob = new Blob([json], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `subnet_data_${new Date().toISOString().slice(0, 10)}.json`;
+            a.click();
+            URL.revokeObjectURL(url);
+        }
+
+        // 顯示加載中
+        function showLoading(show) {
+            const loadingEl = document.getElementById('loading-indicator');
+            const containerEl = document.getElementById('subnets-container');
+            if (show) {
+                loadingEl.classList.remove('hidden');
+                containerEl.classList.add('hidden');
+            } else {
+                loadingEl.classList.add('hidden');
+                containerEl.classList.remove('hidden');
+            }
+        }
+
+        // 顯示錯誤
+        function showError(message) {
+            const container = document.getElementById('error-container');
+            document.getElementById('error-message').textContent = message;
+            container.classList.remove('hidden');
+        }
+
+        // 隱藏錯誤
+        function hideError() {
+            document.getElementById('error-container').classList.add('hidden');
+        }
+
+        // 更新時間
+        function updateTime() {
+            const now = new Date();
+            document.getElementById('update-time').textContent = now.toLocaleTimeString('zh-TW');
+        }
+    </script>
+</body>
+</html>
