@@ -8,12 +8,85 @@ from fastapi.responses import HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 import uvicorn
 import logging
+from logging.handlers import RotatingFileHandler
+from uvicorn.config import LOGGING_CONFIG as UVICORN_LOGGING_CONFIG
+import copy
 import json
+import os
 import redis
 import pickle
+import signal
+import subprocess
+import threading
+import time
 
 # 設置日誌（必須在最前面，在任何其他代碼之前）
-logging.basicConfig(level=logging.INFO)
+LOG_FILE = "server.log"
+LOG_FORMAT = "%(asctime)s %(levelname)s [%(name)s] %(message)s"
+
+
+def configure_logging() -> None:
+    """輸出到 console 與 server.log，讓 PyCharm/直接執行都能保留紀錄。"""
+    formatter = logging.Formatter(LOG_FORMAT)
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.INFO)
+
+    if not any(getattr(handler, "_subnet_console_handler", False) for handler in root_logger.handlers):
+        console_handler = logging.StreamHandler()
+        console_handler.setFormatter(formatter)
+        console_handler._subnet_console_handler = True
+        root_logger.addHandler(console_handler)
+
+    if not any(getattr(handler, "_subnet_file_handler", False) for handler in root_logger.handlers):
+        file_handler = RotatingFileHandler(
+            LOG_FILE,
+            maxBytes=10 * 1024 * 1024,
+            backupCount=5,
+            encoding="utf-8",
+        )
+        file_handler.setFormatter(formatter)
+        file_handler._subnet_file_handler = True
+        root_logger.addHandler(file_handler)
+
+    for logger_name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
+        uvicorn_logger = logging.getLogger(logger_name)
+        uvicorn_logger.setLevel(logging.INFO)
+        uvicorn_logger.propagate = True
+
+
+def build_uvicorn_log_config() -> Dict:
+    """讓 python main.py 啟動時，uvicorn 自己的 log 也寫入 server.log。"""
+    log_config = copy.deepcopy(UVICORN_LOGGING_CONFIG)
+    log_config["handlers"]["server_file"] = {
+        "class": "logging.handlers.RotatingFileHandler",
+        "formatter": "default",
+        "filename": LOG_FILE,
+        "maxBytes": 10 * 1024 * 1024,
+        "backupCount": 5,
+        "encoding": "utf-8",
+    }
+    log_config["handlers"]["server_access_file"] = {
+        "class": "logging.handlers.RotatingFileHandler",
+        "formatter": "access",
+        "filename": LOG_FILE,
+        "maxBytes": 10 * 1024 * 1024,
+        "backupCount": 5,
+        "encoding": "utf-8",
+    }
+
+    for logger_name, handler_name in (
+        ("uvicorn", "server_file"),
+        ("uvicorn.error", "server_file"),
+        ("uvicorn.access", "server_access_file"),
+    ):
+        handlers = log_config["loggers"][logger_name].setdefault("handlers", [])
+        if handler_name not in handlers:
+            handlers.append(handler_name)
+
+    return log_config
+
+
+configure_logging()
 logger = logging.getLogger(__name__)
 
 # ==================== 配置 ====================
@@ -26,7 +99,9 @@ REDIS_HOST = 'localhost'
 REDIS_PORT = 6379
 REDIS_DB = 0
 CACHE_TTL_BASIC = 86400  # 基本信息快取時間：24小時（不變化的數據）
-CACHE_TTL_METAGRAPH = 300  # metagraph 快取時間：5分鐘（動態數據）
+CACHE_TTL_METAGRAPH = 3600  # metagraph 快取時間：60分鐘（動態數據）
+CACHE_TTL_SNAPSHOT = 3600  # 整頁 subnet 列表快取時間：60分鐘
+SUBNETS_SNAPSHOT_CACHE_KEY = f"subnets_snapshot:{NETWORK}"
 
 # 初始化 Redis 連接
 try:
@@ -41,6 +116,46 @@ except Exception as e:
 
 # ==================== FastAPI 應用 ====================
 app = FastAPI(title="Bittensor Subnet Info", description="Subnet 分析儀表盤")
+
+
+def _terminate_child_processes() -> int:
+    """Best-effort termination for subprocesses directly owned by this server."""
+    try:
+        result = subprocess.run(
+            ["pgrep", "-P", str(os.getpid())],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except Exception as e:
+        logger.warning(f"無法查詢子程序: {e}")
+        return 0
+
+    child_pids = [int(pid) for pid in result.stdout.split() if pid.isdigit()]
+    for pid in child_pids:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            continue
+        except Exception as e:
+            logger.warning(f"無法終止子程序 {pid}: {e}")
+
+    return len(child_pids)
+
+
+def _stop_website_process(delay: float = 0.3) -> None:
+    """Stop this website process after the API response has had time to flush."""
+    time.sleep(delay)
+    child_count = _terminate_child_processes()
+    logger.info(f"收到網站停止請求，已嘗試停止 {child_count} 個子程序，準備停止主程序")
+
+    try:
+        if redis_client is not None:
+            redis_client.close()
+    except Exception as e:
+        logger.warning(f"關閉 Redis 連線時發生錯誤: {e}")
+
+    os.kill(os.getpid(), signal.SIGTERM)
 
 # ==================== 快取輔助函數 ====================
 
@@ -100,19 +215,130 @@ def calculate_gini_coefficient(values: np.ndarray) -> float:
     return float(max(0, min(1, gini)))
 
 
-def calculate_invest_value(incentives: np.ndarray) -> float:
+def calculate_invest_value_details(incentives: np.ndarray) -> Dict:
     """
-    計算投資價值 (0~1)
-    基於incentive分佈的均勻性
+    計算投資價值 (0~1) 與可追蹤的中間數據
+    基於incentive分佈的均勻性與實際獲得incentive的miner覆蓋率
     0.0 = 分佈極度不均勻（風險高）
-    1.0 = 分佈均勻（風險低）
+    1.0 = 分佈均勻且多數miner都有incentive（風險低）
     """
+    total_count = int(len(incentives))
     if len(incentives) == 0 or np.sum(incentives) == 0:
-        return 0.5
+        return {
+            'invest_value': 0.0,
+            'active_ratio': 0.0,
+            'gini': 0.0,
+            'distribution_score': 0.0,
+            'active_count': 0,
+            'total_count': total_count,
+        }
     
+    active_count = int(np.count_nonzero(incentives > 0))
+    active_ratio = float(active_count / len(incentives))
     gini = calculate_gini_coefficient(incentives)
-    invest_value = 1.0 - gini
-    return float(invest_value)
+    distribution_score = 1.0 - gini
+    invest_value = (distribution_score * 0.7) + (active_ratio * 0.3)
+    return {
+        'invest_value': float(invest_value),
+        'active_ratio': active_ratio,
+        'gini': gini,
+        'distribution_score': distribution_score,
+        'active_count': active_count,
+        'total_count': total_count,
+    }
+
+
+def calculate_invest_value(incentives: np.ndarray) -> float:
+    """保留單純回傳分數的介面，供其他呼叫端使用。"""
+    return float(calculate_invest_value_details(incentives)['invest_value'])
+
+
+def build_metagraph_metrics(metagraph_data: Dict) -> Dict:
+    """從metagraph數據計算前端顯示所需的統計值。"""
+    if 'validator_permit' not in metagraph_data:
+        raise ValueError("metagraph 快取缺少 validator_permit，需重新抓取")
+
+    netuid = metagraph_data.get('netuid')
+    incentives = np.array(metagraph_data['incentives'])
+    has_incentives = len(incentives) > 0
+    active_incentive_miners = int(np.count_nonzero(incentives > 0)) if has_incentives else 0
+    total_uids = int(metagraph_data.get('n', len(metagraph_data.get('hotkeys', []))))
+    validator_permits = np.array(metagraph_data.get('validator_permit', []), dtype=bool)
+    validator_count = int(np.count_nonzero(validator_permits)) if len(validator_permits) > 0 else 0
+    miner_count = max(total_uids - validator_count, 0)
+    invest_details = calculate_invest_value_details(incentives)
+    incentive_mean = float(np.mean(incentives)) if has_incentives else None
+    incentive_std = float(np.std(incentives)) if has_incentives else None
+    logger.info(
+        "投資價值計算 netuid=%s invest_value=%.6f formula=(0.7*distribution_score)+(0.3*active_ratio) "
+        "distribution_score=%.6f gini=%.6f active_ratio=%.6f active_incentive_miners=%s "
+        "incentive_count=%s total_uids=%s miners=%s validators=%s incentive_mean=%s incentive_std=%s",
+        netuid,
+        invest_details['invest_value'],
+        invest_details['distribution_score'],
+        invest_details['gini'],
+        invest_details['active_ratio'],
+        active_incentive_miners,
+        invest_details['total_count'],
+        total_uids,
+        miner_count,
+        validator_count,
+        f"{incentive_mean:.8f}" if incentive_mean is not None else "N/A",
+        f"{incentive_std:.8f}" if incentive_std is not None else "N/A",
+    )
+
+    return {
+        'n_total_uids': total_uids,
+        'n_miners': miner_count,
+        'n_validators': validator_count,
+        'invest_value': invest_details['invest_value'],
+        'active_incentive_miners': active_incentive_miners,
+        'incentive_active_ratio': invest_details['active_ratio'],
+        'total_stake': float(np.sum(metagraph_data['stakes'])) / 1e9,
+        'total_emissions': float(np.sum(metagraph_data['emissions'])) / 1e9,
+        'incentive_mean': incentive_mean,
+        'incentive_std': incentive_std,
+    }
+
+
+def get_cached_metagraph_metrics(netuid: int) -> Optional[Dict]:
+    """只讀取Redis metagraph快取，不觸發新的鏈上查詢。"""
+    cached_data = get_from_cache(f"metagraph:{netuid}")
+    if cached_data is None:
+        return None
+
+    try:
+        return build_metagraph_metrics(cached_data)
+    except Exception as e:
+        logger.warning(f"Subnet {netuid} metagraph 快取統計計算失敗: {e}")
+        return None
+
+
+def get_cached_subnets_snapshot() -> Optional[List[Dict]]:
+    """讀取整頁 subnet 快取，讓瀏覽器 refresh 不必先重建每個 subnet。"""
+    cached_data = get_from_cache(SUBNETS_SNAPSHOT_CACHE_KEY)
+    if not isinstance(cached_data, dict):
+        return None
+
+    data = cached_data.get('data')
+    if not isinstance(data, list):
+        return None
+
+    return data
+
+
+def set_cached_subnets_snapshot(subnets: List[Dict]) -> None:
+    """保存整頁 subnet 結果，供下一次 browser refresh 優先使用。"""
+    complete_subnets = [subnet for subnet in subnets if not subnet.get('is_partial')]
+    if not complete_subnets:
+        return
+
+    snapshot = {
+        'created_at': time.time(),
+        'total_subnets': len(complete_subnets),
+        'data': sorted(complete_subnets, key=lambda subnet: subnet['netuid'])
+    }
+    set_to_cache(SUBNETS_SNAPSHOT_CACHE_KEY, snapshot, ttl=CACHE_TTL_SNAPSHOT)
 
 
 async def get_subtensor_async() -> bt.Subtensor:
@@ -131,11 +357,14 @@ async def get_metagraph_data_async(subtensor: bt.Subtensor, netuid: int) -> Opti
     # 嘗試從快取獲取
     cached_data = get_from_cache(cache_key)
     if cached_data is not None:
-        print(f"✓ Subnet {netuid} metagraph 從快取讀取")
-        return cached_data
+        if 'validator_permit' not in cached_data:
+            logger.info(f"Subnet {netuid} metagraph 快取缺少 validator_permit，重新抓取")
+        else:
+            logger.info(f"✓ Subnet {netuid} metagraph 從快取讀取")
+            return cached_data
     
     try:
-        print(f"開始獲取Subnet {netuid}的metagraph...")
+        logger.info(f"開始獲取Subnet {netuid}的metagraph...")
         # bt.Metagraph is synchronous/blocking. Run it in a worker thread so
         # asyncio.gather/as_completed can fetch multiple subnets concurrently.
         metagraph = await asyncio.to_thread(
@@ -144,13 +373,15 @@ async def get_metagraph_data_async(subtensor: bt.Subtensor, netuid: int) -> Opti
             lite=True,
             network=NETWORK
         )
-        print(f"成功獲取Subnet {netuid}的metagraph，有{len(metagraph.hotkeys)}個hotkeys")
-        
+        logger.info(f"成功獲取Subnet {netuid}的metagraph，有{len(metagraph.hotkeys)}個hotkeys")
+
+
         # 準備數據
         data = {
             'netuid': netuid,
             'n': len(metagraph.hotkeys),
             'hotkeys': metagraph.hotkeys,
+            'validator_permit': metagraph.validator_permit.cpu().numpy() if hasattr(metagraph.validator_permit, 'cpu') else np.array(metagraph.validator_permit),
             'incentives': metagraph.incentive.cpu().numpy() if hasattr(metagraph.incentive, 'cpu') else np.array(metagraph.incentive),
             'stakes': metagraph.stake.cpu().numpy() if hasattr(metagraph.stake, 'cpu') else np.array(metagraph.stake),
             'emissions': metagraph.emission.cpu().numpy() if hasattr(metagraph.emission, 'cpu') else np.array(metagraph.emission),
@@ -204,7 +435,7 @@ async def get_subnet_registration_cost_async(subtensor: bt.Subtensor, netuid: in
         return 0.0
         
     except Exception as e:
-        print(f"無法獲取Subnet {netuid}的registration cost: {e}")
+        logger.warning(f"無法獲取Subnet {netuid}的registration cost: {e}")
         return 0.0
 
 
@@ -232,32 +463,43 @@ async def get_subnet_info_async(subtensor: bt.Subtensor, netuid: int) -> Dict:
         
         return data
     except Exception as e:
-        print(f"無法獲取Subnet {netuid}的信息: {e}")
+        logger.warning(f"無法獲取Subnet {netuid}的信息: {e}")
         return {}
 
 
 async def process_single_subnet_fast(subtensor: bt.Subtensor, netuid: int) -> Optional[Dict]:
     """快速獲取subnet的基本數據（不包含metagraph）"""
     try:
+        cached_metrics = get_cached_metagraph_metrics(netuid)
+
         # 快速獲取基本信息
         reg_cost, subnet_info = await asyncio.gather(
             get_subnet_registration_cost_async(subtensor, netuid),
             get_subnet_info_async(subtensor, netuid),
             return_exceptions=True
         )
-        
+
+        metagraph_defaults = {
+            'n_total_uids': 0,
+            'n_miners': 0,
+            'n_validators': 0,
+            'total_stake': 0.0,
+            'total_emissions': 0.0,
+            'invest_value': 0.5,
+            'active_incentive_miners': 0,
+            'incentive_active_ratio': 0.0,
+            'incentive_mean': None,
+            'incentive_std': None,
+        }
+        metagraph_metrics = cached_metrics or metagraph_defaults
+
         return {
             'netuid': netuid,
             'name': subnet_info.get('name', 'N/A') if isinstance(subnet_info, dict) else 'N/A',
             'registration_cost': float(reg_cost) if reg_cost else 0.0,
             'owner': subnet_info.get('owner', 'N/A') if isinstance(subnet_info, dict) else 'N/A',
-            'n_validators': 0,
-            'total_stake': 0.0,
-            'total_emissions': 0.0,
-            'invest_value': 0.5,
-            'incentive_mean': 0.0,
-            'incentive_std': 0.0,
-            'is_partial': True
+            **metagraph_metrics,
+            'is_partial': cached_metrics is None
         }
         
     except Exception as e:
@@ -273,31 +515,16 @@ async def process_single_subnet_metagraph(subtensor: bt.Subtensor, netuid: int) 
         if metagraph_data is None:
             return None
         
-        # 計算投資價值
-        incentives = np.array(metagraph_data['incentives'])
-        invest_value = calculate_invest_value(incentives)
-        
-        # 計算統計信息
-        incentive_mean = float(np.mean(incentives)) if len(incentives) > 0 else 0.0
-        incentive_std = float(np.std(incentives)) if len(incentives) > 0 else 0.0
-        
-        # 計算總量
-        total_stake = float(np.sum(metagraph_data['stakes'])) / 1e9
-        total_emissions = float(np.sum(metagraph_data['emissions'])) / 1e9
+        metrics = build_metagraph_metrics(metagraph_data)
         
         return {
             'netuid': netuid,
-            'n_validators': metagraph_data['n'],
-            'invest_value': invest_value,
-            'total_stake': total_stake,
-            'total_emissions': total_emissions,
-            'incentive_mean': incentive_mean,
-            'incentive_std': incentive_std,
+            **metrics,
             'is_partial': False
         }
         
     except Exception as e:
-        print(f"獲取Subnet {netuid}的metagraph失敗: {e}")
+        logger.error(f"獲取Subnet {netuid}的metagraph失敗: {e}")
         return None
 
 
@@ -315,28 +542,13 @@ async def process_single_subnet(subtensor: bt.Subtensor, netuid: int) -> Optiona
         if metagraph_data is None:
             return None
         
-        # 計算投資價值
-        incentives = np.array(metagraph_data['incentives'])
-        invest_value = calculate_invest_value(incentives)
-        
-        # 計算統計信息
-        incentive_mean = float(np.mean(incentives)) if len(incentives) > 0 else 0.0
-        incentive_std = float(np.std(incentives)) if len(incentives) > 0 else 0.0
-        
-        # 計算總量
-        total_stake = float(np.sum(metagraph_data['stakes'])) / 1e9
-        total_emissions = float(np.sum(metagraph_data['emissions'])) / 1e9
+        metrics = build_metagraph_metrics(metagraph_data)
         
         return {
             'netuid': netuid,
             'name': subnet_info.get('name', 'N/A'),
-            'n_validators': metagraph_data['n'],
             'registration_cost': float(reg_cost) if reg_cost else 0.0,
-            'invest_value': invest_value,
-            'total_stake': total_stake,
-            'total_emissions': total_emissions,
-            'incentive_mean': incentive_mean,
-            'incentive_std': incentive_std,
+            **metrics,
             'owner': subnet_info.get('owner', 'N/A'),
         }
         
@@ -356,7 +568,7 @@ async def get_all_subnets_data_stream(subtensor: bt.Subtensor, min_invest_value:
         else:
             subnet_netuids = list(all_subnets.keys()) if all_subnets else []
         
-        print(f"找到 {len(subnet_netuids)} 個subnet")
+        logger.info(f"找到 {len(subnet_netuids)} 個subnet")
         
         # 使用信號量限制並行請求數量
         semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
@@ -376,7 +588,7 @@ async def get_all_subnets_data_stream(subtensor: bt.Subtensor, min_invest_value:
                     if min_invest_value <= result['invest_value'] <= max_invest_value:
                         yield result
             except Exception as e:
-                print(f"處理subnet時出錯: {e}")
+                logger.warning(f"處理subnet時出錯: {e}")
                 continue
         
     except Exception as e:
@@ -394,7 +606,7 @@ async def get_all_subnets_data_async(subtensor: bt.Subtensor) -> List[Dict]:
         else:
             subnet_netuids = list(all_subnets.keys()) if all_subnets else []
         
-        print(f"找到 {len(subnet_netuids)} 個subnet")
+        logger.info(f"找到 {len(subnet_netuids)} 個subnet")
         
         # 使用信號量限制並行請求數量
         semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
@@ -440,10 +652,15 @@ async def get_index():
 async def get_subnets(min_invest_value: float = 0.0, max_invest_value: float = 1.0):
     """獲取所有subnet數據（支持過濾）"""
     try:
-        subtensor = await get_subtensor_async()
-        
-        # 並行獲取所有subnet數據
-        subnet_data_list = await get_all_subnets_data_async(subtensor)
+        cached_snapshot = get_cached_subnets_snapshot()
+        if cached_snapshot is not None:
+            subnet_data_list = cached_snapshot
+        else:
+            subtensor = await get_subtensor_async()
+
+            # 並行獲取所有subnet數據
+            subnet_data_list = await get_all_subnets_data_async(subtensor)
+            set_cached_subnets_snapshot(subnet_data_list)
         
         # 過濾投資價值
         filtered_subnets = [
@@ -468,6 +685,31 @@ async def get_subnets(min_invest_value: float = 0.0, max_invest_value: float = 1
 async def generate_subnets_stream(min_invest_value: float, max_invest_value: float):
     """生成流式subnet數據：分兩階段，先基本信息，再metagraph數據"""
     try:
+        cached_snapshot = get_cached_subnets_snapshot()
+        if cached_snapshot is not None:
+            logger.info(f"✓ 從整頁快取讀取 {len(cached_snapshot)} 個subnets")
+            yield json.dumps({
+                "type": "total",
+                "count": len(cached_snapshot),
+                "source": "redis_snapshot"
+            }) + "\n"
+
+            for subnet in cached_snapshot:
+                yield json.dumps({
+                    "type": "subnet",
+                    "data": subnet,
+                    "source": "redis_snapshot"
+                }) + "\n"
+
+            yield json.dumps({"type": "basic_complete", "source": "redis_snapshot"}) + "\n"
+            yield json.dumps({
+                "type": "complete",
+                "basic": len(cached_snapshot),
+                "updated": 0,
+                "source": "redis_snapshot"
+            }) + "\n"
+            return
+
         subtensor = await get_subtensor_async()
         
         # 立即發送總subnet數
@@ -477,11 +719,11 @@ async def generate_subnets_stream(min_invest_value: float, max_invest_value: flo
         else:
             subnet_netuids = list(all_subnets.keys()) if all_subnets else []
         
-        print(f"找到{len(subnet_netuids)}個subnets，開始兩階段流式傳輸")
+        logger.info(f"找到{len(subnet_netuids)}個subnets，開始兩階段流式傳輸")
         yield json.dumps({"type": "total", "count": len(subnet_netuids)}) + "\n"
         
         # ========== 第一階段：快速發送基本信息 ==========
-        print("第一階段：快速發送所有subnet的基本信息...")
+        logger.info("第一階段：快速發送所有subnet的基本信息...")
         
         # 快速獲取所有基本信息
         semaphore = asyncio.Semaphore(MAX_CONCURRENT_REQUESTS)
@@ -495,16 +737,18 @@ async def generate_subnets_stream(min_invest_value: float, max_invest_value: flo
         
         # 發送所有基本信息
         basic_count = 0
+        subnet_results_by_netuid = {}
         for result in fast_results:
             if result and not isinstance(result, Exception):
+                subnet_results_by_netuid[result['netuid']] = result
                 yield json.dumps({"type": "subnet", "data": result}) + "\n"
                 basic_count += 1
         
-        print(f"基本信息發送完成：{basic_count}個")
+        logger.info(f"基本信息發送完成：{basic_count}個")
         yield json.dumps({"type": "basic_complete"}) + "\n"
         
         # ========== 第二階段：並行獲取metagraph並逐個更新 ==========
-        print("第二階段：並行獲取metagraph數據...")
+        logger.info("第二階段：並行獲取metagraph數據...")
         
         async def metagraph_with_semaphore(netuid):
             async with semaphore:
@@ -518,12 +762,17 @@ async def generate_subnets_stream(min_invest_value: float, max_invest_value: flo
             try:
                 result = await task
                 if result and not isinstance(result, Exception):
+                    subnet_results_by_netuid[result['netuid']] = {
+                        **subnet_results_by_netuid.get(result['netuid'], {}),
+                        **result
+                    }
                     yield json.dumps({"type": "subnet_update", "data": result}) + "\n"
                     update_count += 1
             except Exception as e:
-                print(f"獲取metagraph更新時出錯: {e}")
+                logger.warning(f"獲取metagraph更新時出錯: {e}")
         
-        print(f"metagraph數據獲取完成：{update_count}個更新")
+        logger.info(f"metagraph數據獲取完成：{update_count}個更新")
+        set_cached_subnets_snapshot(list(subnet_results_by_netuid.values()))
         
         # 發送完成信號
         yield json.dumps({"type": "complete", "basic": basic_count, "updated": update_count}) + "\n"
@@ -566,6 +815,16 @@ async def health_check():
     return JSONResponse({"status": "ok"})
 
 
+@app.post("/api/website/stop")
+async def stop_website():
+    """停止目前網站程序，連帶結束其 background threads 和直接子程序。"""
+    threading.Thread(target=_stop_website_process, daemon=True).start()
+    return JSONResponse({
+        "success": True,
+        "message": "網站停止程序已啟動"
+    })
+
+
 @app.get("/api/diagnostic")
 async def diagnostic():
     """診斷API - 檢查連接和測試單個subnet"""
@@ -577,7 +836,7 @@ async def diagnostic():
     }
     
     try:
-        print("開始診斷測試...")
+        logger.info("開始診斷測試...")
         subtensor = await get_subtensor_async()
         diagnostics["subtensor_connection"] = "success"
         
@@ -587,7 +846,7 @@ async def diagnostic():
         else:
             subnet_netuids = list(all_subnets.keys()) if all_subnets else []
         
-        print(f"找到{len(subnet_netuids)}個subnets，測試前3個...")
+        logger.info(f"找到{len(subnet_netuids)}個subnets，測試前3個...")
         
         for netuid in subnet_netuids[:3]:
             try:
@@ -597,6 +856,7 @@ async def diagnostic():
                         "netuid": netuid,
                         "status": "success",
                         "name": result.get('name', 'N/A'),
+                        "n_miners": result.get('n_miners', 0),
                         "n_validators": result.get('n_validators', 0)
                     })
                 else:
@@ -639,6 +899,7 @@ async def cache_status():
         metagraph_keys = len(redis_client.keys("metagraph:*"))
         reg_cost_keys = len(redis_client.keys("reg_cost:*"))
         subnet_info_keys = len(redis_client.keys("subnet_info:*"))
+        snapshot_keys = len(redis_client.keys("subnets_snapshot:*"))
         
         return JSONResponse({
             "enabled": True,
@@ -646,10 +907,12 @@ async def cache_status():
             "metagraph_cached": metagraph_keys,
             "registration_cost_cached": reg_cost_keys,
             "subnet_info_cached": subnet_info_keys,
+            "subnets_snapshot_cached": snapshot_keys,
             "memory_used": info.get('used_memory_human', 'N/A'),
             "ttl_config": {
                 "basic_info": CACHE_TTL_BASIC,
-                "metagraph": CACHE_TTL_METAGRAPH
+                "metagraph": CACHE_TTL_METAGRAPH,
+                "subnets_snapshot": CACHE_TTL_SNAPSHOT
             }
         })
     except Exception as e:
@@ -671,7 +934,7 @@ async def clear_all_cache(pattern: str = "*"):
     
     try:
         cleared = clear_cache(pattern)
-        print(f"已清除 {cleared} 個快取項目（模式: {pattern}）")
+        logger.info(f"已清除 {cleared} 個快取項目（模式: {pattern}）")
         return JSONResponse({
             "success": True,
             "cleared_count": cleared,
@@ -699,7 +962,8 @@ async def clear_subnet_cache(netuid: int):
         patterns = [
             f"metagraph:{netuid}",
             f"reg_cost:{netuid}",
-            f"subnet_info:{netuid}"
+            f"subnet_info:{netuid}",
+            SUBNETS_SNAPSHOT_CACHE_KEY
         ]
         total_cleared = 0
         for pattern in patterns:
@@ -707,7 +971,7 @@ async def clear_subnet_cache(netuid: int):
             if keys:
                 total_cleared += redis_client.delete(*keys)
         
-        print(f"已清除 Subnet {netuid} 的 {total_cleared} 個快取項目")
+        logger.info(f"已清除 Subnet {netuid} 的 {total_cleared} 個快取項目")
 
         return JSONResponse({
             "success": True,
@@ -733,5 +997,6 @@ if __name__ == "__main__":
         app,
         host="0.0.0.0",
         port=8000,
-        log_level="info"
+        log_level="info",
+        log_config=build_uvicorn_log_config()
     )

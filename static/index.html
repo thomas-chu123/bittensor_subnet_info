@@ -15,21 +15,21 @@
             height: 40px;
             animation: spin 1s linear infinite;
         }
-        
+
         @keyframes spin {
             0% { transform: rotate(0deg); }
             100% { transform: rotate(360deg); }
         }
-        
+
         .subnet-card {
             transition: all 0.3s ease;
         }
-        
+
         .subnet-card:hover {
             transform: translateY(-2px);
             box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.1);
         }
-        
+
         .invest-value-badge {
             display: inline-block;
             padding: 0.5rem 1rem;
@@ -37,19 +37,19 @@
             font-weight: 600;
             color: white;
         }
-        
+
         .invest-value-excellent {
             background: linear-gradient(135deg, #10b981 0%, #059669 100%);
         }
-        
+
         .invest-value-good {
             background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
         }
-        
+
         .invest-value-medium {
             background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
         }
-        
+
         .invest-range-bar {
             position: relative;
             height: 40px;
@@ -58,7 +58,7 @@
             overflow: hidden;
             margin-bottom: 0.5rem;
         }
-        
+
         .invest-range-overlay {
             position: absolute;
             top: 0;
@@ -76,13 +76,13 @@
             font-size: 0.75rem;
             z-index: 1;
         }
-        
+
         .range-input-group {
             display: flex;
             gap: 1rem;
             margin-bottom: 0.5rem;
         }
-        
+
         .range-input-field {
             flex: 1;
             background: rgb(51, 65, 85);
@@ -93,11 +93,159 @@
             text-align: center;
             font-weight: 600;
         }
-        
+
         .range-input-field:focus {
             outline: none;
             border-color: rgb(59, 130, 246);
             background: rgb(30, 41, 59);
+        }
+
+        .dashboard-shell {
+            display: grid;
+            grid-template-columns: 320px minmax(0, 1fr);
+            gap: 1.5rem;
+            position: relative;
+            transition: grid-template-columns 0.25s ease, gap 0.25s ease;
+        }
+
+        .dashboard-shell.settings-collapsed {
+            grid-template-columns: 0 minmax(0, 1fr);
+            gap: 0;
+        }
+
+        .settings-sidebar {
+            position: sticky;
+            top: 5.5rem;
+            align-self: start;
+            min-width: 0;
+            overflow: visible;
+            transition: opacity 0.2s ease, transform 0.25s ease;
+        }
+
+        .settings-panel {
+            transition: opacity 0.2s ease, transform 0.25s ease;
+        }
+
+        .settings-collapsed .settings-sidebar {
+            pointer-events: none;
+        }
+
+        .settings-collapsed .settings-panel {
+            opacity: 0;
+            transform: translateX(-1rem);
+        }
+
+        .settings-toggle {
+            position: absolute;
+            top: 0.75rem;
+            left: 304px;
+            z-index: 30;
+            width: 2.25rem;
+            height: 2.25rem;
+            border-radius: 9999px;
+            border: 1px solid rgb(71, 85, 99);
+            background: rgb(30, 41, 59);
+            color: rgb(226, 232, 240);
+            box-shadow: 0 12px 30px rgba(2, 6, 23, 0.35);
+            transition: left 0.25s ease, background 0.2s ease, transform 0.2s ease;
+        }
+
+        .settings-toggle:hover {
+            background: rgb(51, 65, 85);
+            transform: translateY(-1px);
+        }
+
+        .settings-collapsed .settings-toggle {
+            left: -0.25rem;
+        }
+
+        .settings-toggle-icon {
+            display: block;
+            font-size: 1.5rem;
+            line-height: 1;
+            transform: translateY(-1px);
+        }
+
+        .sortable-header {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.2rem;
+            color: inherit;
+            font: inherit;
+            white-space: nowrap;
+            transition: color 0.2s ease;
+        }
+
+        .sortable-header:hover,
+        .sortable-header:focus-visible {
+            color: rgb(96, 165, 250);
+            outline: none;
+        }
+
+        .sort-icon {
+            width: 0.85rem;
+            color: rgb(148, 163, 184);
+            font-size: 0.8rem;
+            line-height: 1;
+            text-align: center;
+        }
+
+        .subnets-table {
+            min-width: 1180px;
+            table-layout: fixed;
+        }
+
+        .subnets-table th,
+        .subnets-table td {
+            text-align: center;
+            vertical-align: middle;
+        }
+
+        .sortable-header[aria-sort="ascending"] .sort-icon,
+        .sortable-header[aria-sort="descending"] .sort-icon {
+            color: rgb(34, 211, 238);
+        }
+
+        @media (max-width: 1023px) {
+            .dashboard-shell,
+            .dashboard-shell.settings-collapsed {
+                display: block;
+            }
+
+            .settings-sidebar {
+                position: fixed;
+                top: 4rem;
+                left: 0;
+                bottom: 0;
+                width: min(86vw, 340px);
+                padding: 1rem;
+                z-index: 40;
+                overflow-y: auto;
+                background: rgba(15, 23, 42, 0.98);
+                box-shadow: 24px 0 50px rgba(2, 6, 23, 0.45);
+            }
+
+            .settings-collapsed .settings-sidebar {
+                transform: translateX(-100%);
+                pointer-events: none;
+            }
+
+            .settings-collapsed .settings-panel {
+                opacity: 1;
+                transform: none;
+            }
+
+            .settings-toggle {
+                position: fixed;
+                top: 5rem;
+                left: min(calc(86vw - 1.125rem), 322px);
+                z-index: 50;
+            }
+
+            .settings-collapsed .settings-toggle {
+                left: 0.75rem;
+            }
         }
     </style>
 </head>
@@ -123,105 +271,116 @@
 
     <!-- 主容器 -->
     <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        <!-- 控制面板 -->
-        <div class="bg-slate-800 rounded-lg p-6 mb-8 border border-slate-700">
-            <!-- 第一行：投資價值範圍和排序 -->
-            <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-6 pb-6 border-b border-slate-700">
-                <!-- 投資價值範圍過濾 -->
-                <div>
-                    <label class="block text-sm font-medium text-gray-300 mb-2">
-                        投資價值範圍 (低風險 ← → 高風險)
-                    </label>
-                    <!-- 可視化範圍條 -->
-                    <div class="invest-range-bar">
-                        <div class="invest-range-overlay">
-                            <span id="range-label-min">低</span>
-                            <span id="range-label-max">高</span>
+        <div id="dashboard-shell" class="dashboard-shell">
+            <button
+                id="settings-toggle"
+                class="settings-toggle"
+                type="button"
+                aria-label="收合設定選單"
+                aria-controls="settings-sidebar"
+                aria-expanded="true"
+                title="設定選單"
+            >
+                <span id="settings-toggle-icon" class="settings-toggle-icon">‹</span>
+            </button>
+
+            <!-- 設定選單 -->
+            <aside id="settings-sidebar" class="settings-sidebar">
+                <div class="settings-panel bg-slate-800 rounded-lg p-5 border border-slate-700">
+                    <div class="flex items-center justify-between mb-5">
+                        <h2 class="text-lg font-semibold text-gray-100">設定</h2>
+                        <span class="text-xs text-gray-400">Filters</span>
+                    </div>
+
+                    <div class="space-y-6">
+                        <!-- 投資價值範圍過濾 -->
+                        <div>
+                            <label class="block text-sm font-medium text-gray-300 mb-2">
+                                投資價值範圍
+                            </label>
+                            <!-- 可視化範圍條 -->
+                            <div class="invest-range-bar">
+                                <div class="invest-range-overlay">
+                                    <span id="range-label-min">低</span>
+                                    <span id="range-label-max">高</span>
+                                </div>
+                            </div>
+                            <!-- 範圍輸入框 -->
+                            <div class="range-input-group">
+                                <input
+                                    type="number"
+                                    id="min-invest-value-input"
+                                    min="0"
+                                    max="1"
+                                    step="0.01"
+                                    value="0"
+                                    class="range-input-field"
+                                    placeholder="最小值"
+                                >
+                                <input
+                                    type="number"
+                                    id="max-invest-value-input"
+                                    min="0"
+                                    max="1"
+                                    step="0.01"
+                                    value="1"
+                                    class="range-input-field"
+                                    placeholder="最大值"
+                                >
+                            </div>
+                            <div class="text-xs text-gray-400">
+                                顯示範圍: <span id="min-value" class="font-semibold text-blue-400">0.00</span> - <span id="max-value" class="font-semibold text-blue-400">1.00</span>
+                            </div>
+                        </div>
+
+                        <!-- Registration Cost 過濾 -->
+                        <div>
+                            <label class="block text-sm font-medium text-gray-300 mb-2">
+                                Registration Cost 上限 (τ)
+                            </label>
+                            <input
+                                type="number"
+                                id="max-reg-cost-input"
+                                min="0"
+                                step="0.0001"
+                                value="1"
+                                class="range-input-field w-full"
+                                placeholder="輸入最大 registration cost"
+                            >
+                            <div class="text-xs text-gray-400 mt-2">
+                                顯示低於: <span id="reg-cost-value" class="font-semibold text-cyan-400">1.0000</span> τ
+                            </div>
                         </div>
                     </div>
-                    <!-- 範圍輸入框 -->
-                    <div class="range-input-group">
-                        <input 
-                            type="number" 
-                            id="min-invest-value-input" 
-                            min="0" 
-                            max="1" 
-                            step="0.01" 
-                            value="0"
-                            class="range-input-field"
-                            placeholder="最小值"
+
+                    <div class="grid grid-cols-2 gap-3 mt-6 pt-6 border-t border-slate-700">
+                        <button
+                            id="load-data-btn"
+                            class="bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded transition duration-200"
                         >
-                        <input 
-                            type="number" 
-                            id="max-invest-value-input" 
-                            min="0" 
-                            max="1" 
-                            step="0.01" 
-                            value="1"
-                            class="range-input-field"
-                            placeholder="最大值"
+                            🔄 加載
+                        </button>
+                        <button
+                            id="export-btn"
+                            class="bg-green-600 hover:bg-green-700 text-white font-medium py-2 px-4 rounded transition duration-200"
                         >
+                            📥 導出
+                        </button>
                     </div>
-                    <div class="text-xs text-gray-400">
-                        顯示範圍: <span id="min-value" class="font-semibold text-blue-400">0.00</span> - <span id="max-value" class="font-semibold text-blue-400">1.00</span>
-                    </div>
-                </div>
 
-                <!-- Registration Cost 過濾 -->
-                <div>
-                    <label class="block text-sm font-medium text-gray-300 mb-2">
-                        Registration Cost 上限 (τ)
-                    </label>
-                    <input 
-                        type="number" 
-                        id="max-reg-cost-input" 
-                        min="0" 
-                        step="0.1" 
-                        value="1000"
-                        class="range-input-field w-full"
-                        placeholder="輸入最大 registration cost"
+                    <button
+                        id="stop-website-btn"
+                        class="w-full mt-3 bg-red-600 hover:bg-red-700 disabled:bg-red-900 disabled:text-red-200 text-white font-medium py-2 px-4 rounded transition duration-200"
                     >
-                    <div class="text-xs text-gray-400 mt-2">
-                        顯示低於: <span id="reg-cost-value" class="font-semibold text-cyan-400">1000.00</span> τ
-                    </div>
+                        ⏹ 停止 Website
+                    </button>
+                    <div id="stop-website-status" class="min-h-5 mt-2 text-xs text-gray-400"></div>
                 </div>
+            </aside>
 
-                <!-- 排序選項 -->
-                <div>
-                    <label class="block text-sm font-medium text-gray-300 mb-2">
-                        排序方式
-                    </label>
-                    <select 
-                        id="sort-option"
-                        class="w-full bg-slate-700 border border-slate-600 rounded px-3 py-2 text-gray-100 focus:outline-none focus:border-blue-500"
-                    >
-                        <option value="invest_value">投資價值 (高→低)</option>
-                        <option value="registration_cost">Registration Cost (低→高)</option>
-                        <option value="n_validators">Validators 數 (多→少)</option>
-                        <option value="total_stake">總 Stake (高→低)</option>
-                    </select>
-                </div>
-            </div>
-
-            <!-- 第二行：操作按鈕 -->
-            <div class="flex items-center space-x-3">
-                <button 
-                    id="load-data-btn"
-                    class="flex-1 bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded transition duration-200"
-                >
-                    🔄 加載數據
-                </button>
-                <button 
-                    id="export-btn"
-                    class="flex-1 bg-green-600 hover:bg-green-700 text-white font-medium py-2 px-4 rounded transition duration-200"
-                >
-                    📥 導出
-                </button>
-            </div>
-        </div>
-
+            <main class="min-w-0">
         <!-- 統計信息 -->
-        <div id="stats-container" class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
+        <div id="stats-container" class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4 mb-8">
             <div class="bg-slate-800 rounded-lg p-4 border border-slate-700">
                 <div class="text-gray-400 text-sm">總 Subnet 數</div>
                 <div class="text-3xl font-bold text-blue-400" id="stat-total">--</div>
@@ -248,16 +407,49 @@
 
         <div id="subnets-container" class="hidden mb-8">
             <div class="overflow-x-auto rounded-lg border border-slate-700">
-                <table class="w-full text-sm">
+                <table class="subnets-table w-full text-sm">
                     <thead class="bg-slate-700 border-b border-slate-600 sticky top-0">
                         <tr class="text-gray-300 font-semibold">
-                            <th class="px-4 py-3 text-left">Subnet ID</th>
-                            <th class="px-4 py-3 text-center">投資價值</th>
-                            <th class="px-4 py-3 text-right">Registration Cost</th>
-                            <th class="px-4 py-3 text-center">Validators</th>
-                            <th class="px-4 py-3 text-right">Total Stake</th>
-                            <th class="px-4 py-3 text-right">Emissions</th>
-                            <th class="px-4 py-3 text-center">Incentive Mean</th>
+                            <th class="px-3 py-3">
+                                <button class="sortable-header" type="button" data-sort-key="netuid" aria-sort="none">
+                                    <span>Subnet ID</span><span class="sort-icon" aria-hidden="true">↕</span>
+                                </button>
+                            </th>
+                            <th class="px-3 py-3">
+                                <button class="sortable-header" type="button" data-sort-key="invest_value" aria-sort="descending">
+                                    <span>投資價值</span><span class="sort-icon" aria-hidden="true">↓</span>
+                                </button>
+                            </th>
+                            <th class="px-3 py-3">
+                                <button class="sortable-header" type="button" data-sort-key="registration_cost" aria-sort="none">
+                                    <span>Registration Cost</span><span class="sort-icon" aria-hidden="true">↕</span>
+                                </button>
+                            </th>
+                            <th class="px-3 py-3">
+                                <button class="sortable-header" type="button" data-sort-key="n_miners" aria-sort="none">
+                                    <span>Miners</span><span class="sort-icon" aria-hidden="true">↕</span>
+                                </button>
+                            </th>
+                            <th class="px-3 py-3">
+                                <button class="sortable-header" type="button" data-sort-key="active_incentive_miners" aria-sort="none">
+                                    <span>Incentive &gt; 0</span><span class="sort-icon" aria-hidden="true">↕</span>
+                                </button>
+                            </th>
+                            <th class="px-3 py-3">
+                                <button class="sortable-header" type="button" data-sort-key="total_stake" aria-sort="none">
+                                    <span>Total Stake</span><span class="sort-icon" aria-hidden="true">↕</span>
+                                </button>
+                            </th>
+                            <th class="px-3 py-3">
+                                <button class="sortable-header" type="button" data-sort-key="total_emissions" aria-sort="none">
+                                    <span>Emissions</span><span class="sort-icon" aria-hidden="true">↕</span>
+                                </button>
+                            </th>
+                            <th class="px-3 py-3">
+                                <button class="sortable-header" type="button" data-sort-key="incentive_mean" aria-sort="none">
+                                    <span>Incentive Mean</span><span class="sort-icon" aria-hidden="true">↕</span>
+                                </button>
+                            </th>
                         </tr>
                     </thead>
                     <tbody id="subnets-tbody" class="divide-y divide-slate-700">
@@ -277,11 +469,13 @@
         <div id="no-data-container" class="hidden bg-slate-800 rounded-lg p-12 text-center border border-slate-700">
             <div class="text-gray-400 text-lg">沒有符合條件的 Subnet</div>
         </div>
+            </main>
+        </div>
     </div>
 
     <!-- 頁腳 -->
     <footer class="border-t border-slate-700 mt-12 py-6 text-center text-gray-400 text-sm">
-        <p>💡 投資價值 = 1 - Gini係數 | 基於 Incentive 分佈均勻性</p>
+        <p>💡 投資價值 = 70% Incentive 分佈均勻性 + 30% Incentive &gt; 0 miner 覆蓋率</p>
         <p class="mt-2">🔒 Phase 2: SSH 和 RunPod 一鍵部署功能開發中</p>
     </footer>
 
@@ -290,6 +484,10 @@
         let allSubnets = [];
         let displayedSubnets = new Set();  // 追蹤已顯示的 subnet
         let totalSubnets = 0;
+        let currentSort = {
+            key: 'invest_value',
+            direction: 'desc'
+        };
 
         // 初始化
         document.addEventListener('DOMContentLoaded', () => {
@@ -301,15 +499,69 @@
 
         // 設置事件監聽器
         function setupEventListeners() {
+            document.getElementById('settings-toggle').addEventListener('click', toggleSettingsMenu);
             document.getElementById('load-data-btn').addEventListener('click', loadSubnets);
             document.getElementById('export-btn').addEventListener('click', exportData);
+            document.getElementById('stop-website-btn').addEventListener('click', stopWebsite);
             document.getElementById('min-invest-value-input').addEventListener('change', updateFilter);
             document.getElementById('min-invest-value-input').addEventListener('input', updateRangeDisplay);
             document.getElementById('max-invest-value-input').addEventListener('change', updateFilter);
             document.getElementById('max-invest-value-input').addEventListener('input', updateRangeDisplay);
             document.getElementById('max-reg-cost-input').addEventListener('change', updateFilter);
             document.getElementById('max-reg-cost-input').addEventListener('input', updateRegCostDisplay);
-            document.getElementById('sort-option').addEventListener('change', renderSubnets);
+            document.querySelectorAll('[data-sort-key]').forEach(header => {
+                header.addEventListener('click', () => handleHeaderSort(header.dataset.sortKey));
+            });
+            updateSortIndicators();
+
+            if (window.matchMedia('(max-width: 1023px)').matches) {
+                setSettingsMenu(false);
+            } else {
+                setSettingsMenu(true);
+            }
+        }
+
+        // 展開/收合設定選單
+        function toggleSettingsMenu() {
+            const shell = document.getElementById('dashboard-shell');
+            setSettingsMenu(shell.classList.contains('settings-collapsed'));
+        }
+
+        function setSettingsMenu(isOpen) {
+            const shell = document.getElementById('dashboard-shell');
+            const toggle = document.getElementById('settings-toggle');
+            const icon = document.getElementById('settings-toggle-icon');
+
+            shell.classList.toggle('settings-collapsed', !isOpen);
+            toggle.setAttribute('aria-expanded', String(isOpen));
+            toggle.setAttribute('aria-label', isOpen ? '收合設定選單' : '展開設定選單');
+            icon.textContent = isOpen ? '‹' : '›';
+        }
+
+        // 停止網站程序
+        async function stopWebsite() {
+            const confirmed = window.confirm('確定要停止 Website？這會關閉目前的 server process 和它的 background threads。');
+            if (!confirmed) return;
+
+            const button = document.getElementById('stop-website-btn');
+            const status = document.getElementById('stop-website-status');
+            button.disabled = true;
+            button.textContent = '⏹ 停止中...';
+            status.textContent = '正在送出停止請求...';
+
+            try {
+                const response = await fetch('/api/website/stop', { method: 'POST' });
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+
+                status.textContent = '停止請求已送出，Website 即將關閉。';
+            } catch (error) {
+                console.error('停止網站失敗:', error);
+                button.disabled = false;
+                button.textContent = '⏹ 停止 Website';
+                status.textContent = `停止失敗: ${error.message}`;
+            }
         }
 
         // 更新範圍顯示
@@ -387,7 +639,7 @@
                             } else if (message.type === 'subnet') {
                                 // 基本信息數據
                                 const subnet = message.data;
-                                
+
                                 // 檢查是否已存在，存在則更新，不存在則添加
                                 const existingIndex = allSubnets.findIndex(s => s.netuid === subnet.netuid);
                                 if (existingIndex >= 0) {
@@ -395,9 +647,9 @@
                                 } else {
                                     allSubnets.push(subnet);
                                 }
-                                
+
                                 basicCount++;
-                                
+
                                 // 每 10 個basic subnet或完成時更新表格
                                 if (basicCount % 10 === 0) {
                                     renderSubnets();
@@ -444,7 +696,7 @@
         function updateSubnetRowInTable(netuid, updateData) {
             const tbody = document.getElementById('subnets-tbody');
             const rows = tbody.getElementsByTagName('tr');
-            
+
             for (let row of rows) {
                 if (parseInt(row.dataset.netuid) === netuid) {
                     // 找到對應行，更新其內容
@@ -452,8 +704,7 @@
                     if (subnet) {
                         // 重新創建該行
                         const newRow = createSubnetRow(subnet);
-                        row.innerHTML = newRow.substring(newRow.indexOf('<td>'), newRow.lastIndexOf('</tr>'));
-                        row.className = newRow.match(/class="[^"]+"/)[0].substring(7).slice(0, -1);
+                        row.outerHTML = newRow;
                         break;
                     }
                 }
@@ -476,8 +727,13 @@
         function updateStatsDisplay() {
             const minValue = parseFloat(document.getElementById('min-invest-value-input').value);
             const maxValue = parseFloat(document.getElementById('max-invest-value-input').value);
+            const maxRegCost = parseFloat(document.getElementById('max-reg-cost-input').value);
 
-            const filtered = allSubnets.filter(s => s.invest_value >= minValue && s.invest_value <= maxValue);
+            const filtered = allSubnets.filter(s =>
+                s.invest_value >= minValue &&
+                s.invest_value <= maxValue &&
+                s.registration_cost <= maxRegCost
+            );
 
             document.getElementById('stat-total').textContent = totalSubnets;
             document.getElementById('stat-filtered').textContent = filtered.length;
@@ -491,6 +747,57 @@
             }
         }
 
+        function handleHeaderSort(sortKey) {
+            if (currentSort.key === sortKey) {
+                currentSort.direction = currentSort.direction === 'asc' ? 'desc' : 'asc';
+            } else {
+                currentSort = {
+                    key: sortKey,
+                    direction: getDefaultSortDirection(sortKey)
+                };
+            }
+
+            renderSubnets();
+        }
+
+        function getDefaultSortDirection(sortKey) {
+            return sortKey === 'registration_cost' || sortKey === 'netuid' ? 'asc' : 'desc';
+        }
+
+        function updateSortIndicators() {
+            document.querySelectorAll('[data-sort-key]').forEach(header => {
+                const isActive = header.dataset.sortKey === currentSort.key;
+                const direction = isActive ? currentSort.direction : 'none';
+                const icon = header.querySelector('.sort-icon');
+
+                header.setAttribute(
+                    'aria-sort',
+                    direction === 'asc' ? 'ascending' : direction === 'desc' ? 'descending' : 'none'
+                );
+                icon.textContent = direction === 'asc' ? '↑' : direction === 'desc' ? '↓' : '↕';
+            });
+        }
+
+        function isValidNumber(value) {
+            return typeof value === 'number' && Number.isFinite(value);
+        }
+
+        function formatOptionalNumber(value, digits = 4) {
+            return isValidNumber(value) ? value.toFixed(digits) : 'N/A';
+        }
+
+        function compareOptionalNumber(aValue, bValue, direction) {
+            const aMissing = !isValidNumber(aValue);
+            const bMissing = !isValidNumber(bValue);
+
+            if (aMissing && bMissing) return 0;
+            if (aMissing) return 1;
+            if (bMissing) return -1;
+
+            const result = aValue - bValue;
+            return direction === 'asc' ? result : -result;
+        }
+
         // 重新渲染 Subnet 列表
         function renderSubnets() {
             const container = document.getElementById('subnets-container');
@@ -502,27 +809,53 @@
 
             // 過濾 subnet（投資價值 + Registration Cost）
             const filtered = allSubnets.filter(subnet =>
-                subnet.invest_value >= minValue && 
+                subnet.invest_value >= minValue &&
                 subnet.invest_value <= maxValue &&
                 subnet.registration_cost <= maxRegCost
             );
 
             // 排序
-            const sortOption = document.getElementById('sort-option').value;
             filtered.sort((a, b) => {
-                switch(sortOption) {
+                let result = 0;
+                let directionApplied = false;
+
+                switch(currentSort.key) {
+                    case 'netuid':
+                        result = a.netuid - b.netuid;
+                        break;
                     case 'invest_value':
-                        return b.invest_value - a.invest_value;
+                        result = a.invest_value - b.invest_value;
+                        break;
                     case 'registration_cost':
-                        return a.registration_cost - b.registration_cost;
-                    case 'n_validators':
-                        return b.n_validators - a.n_validators;
+                        result = a.registration_cost - b.registration_cost;
+                        break;
+                    case 'n_miners':
+                        result = (a.n_miners || 0) - (b.n_miners || 0);
+                        break;
+                    case 'active_incentive_miners':
+                        result = (a.active_incentive_miners || 0) - (b.active_incentive_miners || 0);
+                        break;
                     case 'total_stake':
-                        return b.total_stake - a.total_stake;
+                        result = a.total_stake - b.total_stake;
+                        break;
+                    case 'total_emissions':
+                        result = a.total_emissions - b.total_emissions;
+                        break;
+                    case 'incentive_mean':
+                        result = compareOptionalNumber(a.incentive_mean, b.incentive_mean, currentSort.direction);
+                        directionApplied = true;
+                        break;
                     default:
-                        return 0;
+                        result = 0;
                 }
+
+                if (result === 0) {
+                    return a.netuid - b.netuid;
+                }
+
+                return directionApplied ? result : currentSort.direction === 'asc' ? result : -result;
             });
+            updateSortIndicators();
 
             if (filtered.length === 0) {
                 container.classList.add('hidden');
@@ -540,7 +873,7 @@
         function createSubnetRow(subnet) {
             const investBadgeClass = getInvestBadgeClass(subnet.invest_value);
             const investQuality = getInvestQuality(subnet.invest_value);
-            
+
             // 確定行的背景顏色
             let rowBg = 'hover:bg-slate-700/50';
             if (subnet.invest_value >= 0.8) rowBg = 'hover:bg-green-900/20';
@@ -558,20 +891,23 @@
                             ${subnet.invest_value.toFixed(2)}
                         </div>
                     </td>
-                    <td class="px-4 py-3 text-right text-cyan-400">
-                        ${subnet.registration_cost.toFixed(2)} τ
+                    <td class="px-3 py-3 text-cyan-400">
+                        ${subnet.registration_cost.toFixed(4)} τ
                     </td>
-                    <td class="px-4 py-3 text-center text-green-400">
-                        ${subnet.n_validators}
+                    <td class="px-3 py-3 text-green-400">
+                        ${subnet.n_miners || 0}
                     </td>
-                    <td class="px-4 py-3 text-right text-yellow-400">
+                    <td class="px-3 py-3 text-emerald-300">
+                        ${subnet.active_incentive_miners || 0}
+                    </td>
+                    <td class="px-3 py-3 text-yellow-400">
                         ${formatTao(subnet.total_stake)}
                     </td>
-                    <td class="px-4 py-3 text-right text-purple-400">
+                    <td class="px-3 py-3 text-purple-400">
                         ${formatTao(subnet.total_emissions)}
                     </td>
-                    <td class="px-4 py-3 text-center text-blue-400">
-                        ${subnet.incentive_mean.toFixed(4)}
+                    <td class="px-3 py-3 text-blue-400">
+                        ${formatOptionalNumber(subnet.incentive_mean)}
                     </td>
                 </tr>
             `;
@@ -605,8 +941,13 @@
         function exportData() {
             const minValue = parseFloat(document.getElementById('min-invest-value-input').value);
             const maxValue = parseFloat(document.getElementById('max-invest-value-input').value);
-            
-            const filtered = allSubnets.filter(s => s.invest_value >= minValue && s.invest_value <= maxValue);
+            const maxRegCost = parseFloat(document.getElementById('max-reg-cost-input').value);
+
+            const filtered = allSubnets.filter(s =>
+                s.invest_value >= minValue &&
+                s.invest_value <= maxValue &&
+                s.registration_cost <= maxRegCost
+            );
             const json = JSON.stringify(filtered, null, 2);
             const blob = new Blob([json], { type: 'application/json' });
             const url = URL.createObjectURL(blob);
