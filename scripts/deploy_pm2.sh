@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
+pm2 delete bittensor-subnet-info
 
 APP_NAME="${APP_NAME:-bittensor-subnet-info}"
-APP_PORT="${APP_PORT:-9999}"
+APP_PORT="${APP_PORT:-8000}"
 APP_HOST="${APP_HOST:-0.0.0.0}"
 PROJECT_DIR="${PROJECT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 VENV_DIR="${VENV_DIR:-$PROJECT_DIR/.venv}"
