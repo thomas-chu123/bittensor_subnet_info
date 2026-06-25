@@ -11,14 +11,19 @@ import logging
 from logging.handlers import RotatingFileHandler
 from uvicorn.config import LOGGING_CONFIG as UVICORN_LOGGING_CONFIG
 import copy
+import html
 import json
 import os
 import redis
 import pickle
+import re
 import signal
 import subprocess
 import threading
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
 
 # 設置日誌（必須在最前面，在任何其他代碼之前）
 LOG_FILE = "server.log"
@@ -101,6 +106,7 @@ REDIS_DB = 0
 CACHE_TTL_BASIC = 86400  # 基本信息快取時間：24小時（不變化的數據）
 CACHE_TTL_METAGRAPH = 3600  # metagraph 快取時間：60分鐘（動態數據）
 CACHE_TTL_SNAPSHOT = 3600  # 整頁 subnet 列表快取時間：60分鐘
+TAOMARKETCAP_GITHUB_URL_TEMPLATE = "https://taomarketcap.com/subnets/{netuid}/github"
 SUBNETS_SNAPSHOT_CACHE_KEY = f"subnets_snapshot:{NETWORK}"
 SUBNET_METRICS_CACHE_PREFIX = "subnet_metrics"
 SUBNET_METRICS_REQUIRED_FIELDS = (
@@ -111,6 +117,8 @@ SUBNET_METRICS_REQUIRED_FIELDS = (
     'total_stake',
     'total_emissions',
     'incentive_mean',
+    'repo_url',
+    'gpu_required',
 )
 
 # 初始化 Redis 連接
@@ -263,6 +271,170 @@ def calculate_invest_value(incentives: np.ndarray) -> float:
     return float(calculate_invest_value_details(incentives)['invest_value'])
 
 
+def fetch_text_url(url: str, timeout: float = 10.0) -> Optional[str]:
+    """讀取外部文字資源；所有呼叫端都必須能接受失敗回傳 None。"""
+    request = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": "bittensor-subnet-info/1.0",
+            "Accept": "text/html,text/plain,application/json,*/*",
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            charset = response.headers.get_content_charset() or "utf-8"
+            return response.read().decode(charset, errors="replace")
+    except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, UnicodeDecodeError) as e:
+        logger.info(f"讀取外部資源失敗 url={url}: {type(e).__name__}: {e}")
+        return None
+
+
+def normalize_github_repo_url(url: str) -> Optional[str]:
+    """將 GitHub URL 正規化為 repo 根路徑，避免把 issue/tree/blob 等頁面存進快取。"""
+    parsed = urllib.parse.urlparse(html.unescape(url).strip())
+    if parsed.netloc.lower() != "github.com":
+        return None
+
+    parts = [part for part in parsed.path.split("/") if part]
+    if len(parts) < 2:
+        return None
+
+    owner = parts[0]
+    repo = parts[1][:-4] if parts[1].endswith(".git") else parts[1]
+    if not owner or not repo:
+        return None
+
+    return f"https://github.com/{owner}/{repo}"
+
+
+def extract_repo_url_from_taomarketcap(content: str) -> Optional[str]:
+    """從 Taomarketcap GitHub 頁面內容擷取第一個可用的 GitHub repo URL。"""
+    decoded_content = urllib.parse.unquote(html.unescape(content)).replace("\\/", "/")
+    quoted_url_match = re.search(
+        r"https?://github\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:\.git)?",
+        decoded_content,
+    )
+    if quoted_url_match:
+        return normalize_github_repo_url(quoted_url_match.group(0))
+
+    return None
+
+
+def parse_github_owner_repo(repo_url: str) -> Optional[Dict]:
+    parsed = urllib.parse.urlparse(repo_url)
+    if parsed.netloc.lower() != "github.com":
+        return None
+
+    parts = [part for part in parsed.path.split("/") if part]
+    if len(parts) < 2:
+        return None
+
+    return {
+        "owner": parts[0],
+        "repo": parts[1][:-4] if parts[1].endswith(".git") else parts[1],
+    }
+
+
+def fetch_github_default_branch(repo_url: str) -> Optional[str]:
+    repo_parts = parse_github_owner_repo(repo_url)
+    if repo_parts is None:
+        return None
+
+    owner = repo_parts["owner"]
+    repo = repo_parts["repo"]
+    api_url = f"https://api.github.com/repos/{owner}/{repo}"
+    repo_content = fetch_text_url(api_url)
+    if not repo_content:
+        return None
+
+    try:
+        repo_data = json.loads(repo_content)
+    except json.JSONDecodeError:
+        return None
+
+    default_branch = repo_data.get("default_branch")
+    return default_branch if isinstance(default_branch, str) and default_branch else None
+
+
+def build_min_compute_urls(repo_url: str, default_branch: Optional[str] = None) -> List[str]:
+    repo_parts = parse_github_owner_repo(repo_url)
+    if repo_parts is None:
+        return []
+
+    owner = repo_parts["owner"]
+    repo = repo_parts["repo"]
+    branches = []
+    for branch in (default_branch, "main", "master"):
+        if branch and branch not in branches:
+            branches.append(branch)
+
+    return [
+        f"https://raw.githubusercontent.com/{owner}/{repo}/{branch}/min_compute.yml"
+        for branch in branches
+    ]
+
+
+def parse_gpu_required_from_min_compute(content: str) -> bool:
+    """解析 min_compute.yml 的 gpu.required；缺值或非 true 一律視為 False。"""
+    in_gpu_block = False
+    gpu_indent = 0
+
+    for raw_line in content.splitlines():
+        line_without_comment = raw_line.split("#", 1)[0].rstrip()
+        if not line_without_comment.strip():
+            continue
+
+        indent = len(line_without_comment) - len(line_without_comment.lstrip(" "))
+        stripped = line_without_comment.strip()
+
+        if re.match(r"^gpu\s*:\s*$", stripped):
+            in_gpu_block = True
+            gpu_indent = indent
+            continue
+
+        if in_gpu_block and indent <= gpu_indent:
+            in_gpu_block = False
+
+        if in_gpu_block:
+            required_match = re.match(r"^required\s*:\s*(true|false|yes|no|1|0)\s*$", stripped, re.IGNORECASE)
+            if required_match:
+                return required_match.group(1).lower() in ("true", "yes", "1")
+
+    return False
+
+
+def fetch_subnet_repo_metadata(netuid: int) -> Dict:
+    taomarketcap_url = TAOMARKETCAP_GITHUB_URL_TEMPLATE.format(netuid=netuid)
+    page_content = fetch_text_url(taomarketcap_url)
+    repo_url = extract_repo_url_from_taomarketcap(page_content) if page_content else None
+
+    gpu_required = False
+    if repo_url:
+        default_branch = fetch_github_default_branch(repo_url)
+        for min_compute_url in build_min_compute_urls(repo_url, default_branch):
+            min_compute_content = fetch_text_url(min_compute_url)
+            if min_compute_content is not None:
+                gpu_required = parse_gpu_required_from_min_compute(min_compute_content)
+                break
+
+    return {
+        "repo_url": repo_url,
+        "gpu_required": gpu_required,
+    }
+
+
+async def get_subnet_repo_metadata_async(netuid: int) -> Dict:
+    """讀取 Taomarketcap repo URL 與 min_compute.yml GPU 需求，並寫入快取。"""
+    cache_key = f"repo_metadata:{netuid}"
+    cached_data = get_from_cache(cache_key)
+    if isinstance(cached_data, dict) and "repo_url" in cached_data and "gpu_required" in cached_data:
+        return cached_data
+
+    metadata = await asyncio.to_thread(fetch_subnet_repo_metadata, netuid)
+    set_to_cache(cache_key, metadata, ttl=CACHE_TTL_BASIC)
+    return metadata
+
+
 def build_metagraph_metrics(metagraph_data: Dict) -> Dict:
     """從metagraph數據計算前端顯示所需的統計值。"""
     if 'validator_permit' not in metagraph_data:
@@ -397,6 +569,17 @@ def get_cached_subnets_snapshot() -> Optional[List[Dict]]:
     data = cached_data.get('data')
     if not isinstance(data, list):
         return None
+
+    for subnet in data:
+        if not isinstance(subnet, dict):
+            return None
+        missing_fields = [
+            field for field in SUBNET_METRICS_REQUIRED_FIELDS
+            if field not in subnet
+        ]
+        if missing_fields:
+            logger.info(f"整頁 subnet 快取缺少欄位 {missing_fields}，忽略舊快取")
+            return None
 
     return data
 
@@ -554,9 +737,10 @@ async def process_single_subnet_fast(subtensor: bt.Subtensor, netuid: int) -> Op
         cached_metrics = get_cached_metagraph_metrics(netuid)
 
         # 快速獲取基本信息
-        reg_cost, subnet_info = await asyncio.gather(
+        reg_cost, subnet_info, repo_metadata = await asyncio.gather(
             get_subnet_registration_cost_async(subtensor, netuid),
             get_subnet_info_async(subtensor, netuid),
+            get_subnet_repo_metadata_async(netuid),
             return_exceptions=True
         )
 
@@ -573,12 +757,15 @@ async def process_single_subnet_fast(subtensor: bt.Subtensor, netuid: int) -> Op
             'incentive_std': None,
         }
         metagraph_metrics = cached_metrics or metagraph_defaults
+        repo_data = repo_metadata if isinstance(repo_metadata, dict) else {}
 
         return {
             'netuid': netuid,
             'name': subnet_info.get('name', 'N/A') if isinstance(subnet_info, dict) else 'N/A',
             'registration_cost': float(reg_cost) if reg_cost else 0.0,
             'owner': subnet_info.get('owner', 'N/A') if isinstance(subnet_info, dict) else 'N/A',
+            'repo_url': repo_data.get('repo_url'),
+            'gpu_required': bool(repo_data.get('gpu_required', False)),
             **metagraph_metrics,
             'is_partial': cached_metrics is None
         }
@@ -617,10 +804,11 @@ async def process_single_subnet(subtensor: bt.Subtensor, netuid: int) -> Optiona
             return cached_subnet_metrics
 
         # 並行獲取所有信息
-        metagraph_data, reg_cost, subnet_info = await asyncio.gather(
+        metagraph_data, reg_cost, subnet_info, repo_metadata = await asyncio.gather(
             get_metagraph_data_async(subtensor, netuid),
             get_subnet_registration_cost_async(subtensor, netuid),
             get_subnet_info_async(subtensor, netuid),
+            get_subnet_repo_metadata_async(netuid),
             return_exceptions=True
         )
         
@@ -629,11 +817,14 @@ async def process_single_subnet(subtensor: bt.Subtensor, netuid: int) -> Optiona
         
         metrics = build_metagraph_metrics(metagraph_data)
         subnet_info_data = subnet_info if isinstance(subnet_info, dict) else {}
+        repo_data = repo_metadata if isinstance(repo_metadata, dict) else {}
         
         subnet_data = {
             'netuid': netuid,
             'name': subnet_info_data.get('name', 'N/A'),
             'registration_cost': float(reg_cost) if reg_cost else 0.0,
+            'repo_url': repo_data.get('repo_url'),
+            'gpu_required': bool(repo_data.get('gpu_required', False)),
             **metrics,
             'owner': subnet_info_data.get('owner', 'N/A'),
         }
@@ -989,6 +1180,7 @@ async def cache_status():
         metagraph_keys = len(redis_client.keys("metagraph:*"))
         reg_cost_keys = len(redis_client.keys("reg_cost:*"))
         subnet_info_keys = len(redis_client.keys("subnet_info:*"))
+        repo_metadata_keys = len(redis_client.keys("repo_metadata:*"))
         subnet_metrics_keys = len(redis_client.keys(f"{SUBNET_METRICS_CACHE_PREFIX}:*"))
         snapshot_keys = len(redis_client.keys("subnets_snapshot:*"))
         
@@ -998,6 +1190,7 @@ async def cache_status():
             "metagraph_cached": metagraph_keys,
             "registration_cost_cached": reg_cost_keys,
             "subnet_info_cached": subnet_info_keys,
+            "repo_metadata_cached": repo_metadata_keys,
             "subnet_metrics_cached": subnet_metrics_keys,
             "subnets_snapshot_cached": snapshot_keys,
             "memory_used": info.get('used_memory_human', 'N/A'),
@@ -1056,6 +1249,7 @@ async def clear_subnet_cache(netuid: int):
             f"metagraph:{netuid}",
             f"reg_cost:{netuid}",
             f"subnet_info:{netuid}",
+            f"repo_metadata:{netuid}",
             get_subnet_metrics_cache_key(netuid),
             SUBNETS_SNAPSHOT_CACHE_KEY
         ]
