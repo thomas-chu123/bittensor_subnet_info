@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Bittensor Subnet 信息儀表盤</title>
+    <title>Bittensor Subnet Dashboard</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
@@ -259,11 +259,11 @@
                         <span class="text-white font-bold">🧠</span>
                     </div>
                     <h1 class="text-2xl font-bold bg-gradient-to-r from-blue-400 to-cyan-400 bg-clip-text text-transparent">
-                        Bittensor Subnet 儀表盤
+                        Bittensor Subnet Dashboard
                     </h1>
                 </div>
                 <div class="text-sm text-gray-400" id="last-update">
-                    最後更新: <span id="update-time">--:--:--</span>
+                    Last updated: <span id="update-time">--:--:--</span>
                 </div>
             </div>
         </div>
@@ -276,10 +276,10 @@
                 id="settings-toggle"
                 class="settings-toggle"
                 type="button"
-                aria-label="收合設定選單"
+                aria-label="Collapse settings menu"
                 aria-controls="settings-sidebar"
                 aria-expanded="true"
-                title="設定選單"
+                title="Settings menu"
             >
                 <span id="settings-toggle-icon" class="settings-toggle-icon">‹</span>
             </button>
@@ -288,7 +288,7 @@
             <aside id="settings-sidebar" class="settings-sidebar">
                 <div class="settings-panel bg-slate-800 rounded-lg p-5 border border-slate-700">
                     <div class="flex items-center justify-between mb-5">
-                        <h2 class="text-lg font-semibold text-gray-100">設定</h2>
+                        <h2 class="text-lg font-semibold text-gray-100">Settings</h2>
                         <span class="text-xs text-gray-400">Filters</span>
                     </div>
 
@@ -296,13 +296,13 @@
                         <!-- 投資價值範圍過濾 -->
                         <div>
                             <label class="block text-sm font-medium text-gray-300 mb-2">
-                                投資價值範圍
+                                Investment Value Range
                             </label>
                             <!-- 可視化範圍條 -->
                             <div class="invest-range-bar">
                                 <div class="invest-range-overlay">
-                                    <span id="range-label-min">低</span>
-                                    <span id="range-label-max">高</span>
+                                    <span id="range-label-min">Low</span>
+                                    <span id="range-label-max">High</span>
                                 </div>
                             </div>
                             <!-- 範圍輸入框 -->
@@ -315,7 +315,7 @@
                                     step="0.01"
                                     value="0"
                                     class="range-input-field"
-                                    placeholder="最小值"
+                                    placeholder="Minimum"
                                 >
                                 <input
                                     type="number"
@@ -325,18 +325,18 @@
                                     step="0.01"
                                     value="1"
                                     class="range-input-field"
-                                    placeholder="最大值"
+                                    placeholder="Maximum"
                                 >
                             </div>
                             <div class="text-xs text-gray-400">
-                                顯示範圍: <span id="min-value" class="font-semibold text-blue-400">0.00</span> - <span id="max-value" class="font-semibold text-blue-400">1.00</span>
+                                Display range: <span id="min-value" class="font-semibold text-blue-400">0.00</span> - <span id="max-value" class="font-semibold text-blue-400">1.00</span>
                             </div>
                         </div>
 
                         <!-- Registration Cost 過濾 -->
                         <div>
                             <label class="block text-sm font-medium text-gray-300 mb-2">
-                                Registration Cost 上限 (τ)
+                                Registration Cost Limit (τ)
                             </label>
                             <input
                                 type="number"
@@ -345,10 +345,10 @@
                                 step="0.0001"
                                 value="1"
                                 class="range-input-field w-full"
-                                placeholder="輸入最大 registration cost"
+                                placeholder="Enter max registration cost"
                             >
                             <div class="text-xs text-gray-400 mt-2">
-                                顯示低於: <span id="reg-cost-value" class="font-semibold text-cyan-400">1.0000</span> τ
+                                Show below: <span id="reg-cost-value" class="font-semibold text-cyan-400">1.0000</span> τ
                             </div>
                         </div>
                     </div>
@@ -358,13 +358,13 @@
                             id="load-data-btn"
                             class="bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded transition duration-200"
                         >
-                            🔄 加載
+                            🔄 Load
                         </button>
                         <button
                             id="export-btn"
                             class="bg-green-600 hover:bg-green-700 text-white font-medium py-2 px-4 rounded transition duration-200"
                         >
-                            📥 導出
+                            📥 Export
                         </button>
                     </div>
 
@@ -372,7 +372,7 @@
                         id="stop-website-btn"
                         class="w-full mt-3 bg-red-600 hover:bg-red-700 disabled:bg-red-900 disabled:text-red-200 text-white font-medium py-2 px-4 rounded transition duration-200"
                     >
-                        ⏹ 停止 Website
+                        ⏹ Stop Website
                     </button>
                     <div id="stop-website-status" class="min-h-5 mt-2 text-xs text-gray-400"></div>
                 </div>
@@ -382,19 +382,19 @@
         <!-- 統計信息 -->
         <div id="stats-container" class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4 mb-8">
             <div class="bg-slate-800 rounded-lg p-4 border border-slate-700">
-                <div class="text-gray-400 text-sm">總 Subnet 數</div>
+                <div class="text-gray-400 text-sm">Total Subnets</div>
                 <div class="text-3xl font-bold text-blue-400" id="stat-total">--</div>
             </div>
             <div class="bg-slate-800 rounded-lg p-4 border border-slate-700">
-                <div class="text-gray-400 text-sm">顯示 Subnet 數</div>
+                <div class="text-gray-400 text-sm">Displayed Subnets</div>
                 <div class="text-3xl font-bold text-green-400" id="stat-filtered">--</div>
             </div>
             <div class="bg-slate-800 rounded-lg p-4 border border-slate-700">
-                <div class="text-gray-400 text-sm">平均投資價值</div>
+                <div class="text-gray-400 text-sm">Average Investment Value</div>
                 <div class="text-3xl font-bold text-yellow-400" id="stat-avg-invest">--</div>
             </div>
             <div class="bg-slate-800 rounded-lg p-4 border border-slate-700">
-                <div class="text-gray-400 text-sm">總 Registration Cost</div>
+                <div class="text-gray-400 text-sm">Total Registration Cost</div>
                 <div class="text-3xl font-bold text-cyan-400" id="stat-total-cost">--</div>
             </div>
         </div>
@@ -402,7 +402,7 @@
         <!-- Subnet 列表容器 -->
         <div id="loading-indicator" class="flex justify-center items-center py-12">
             <div class="loading-spinner"></div>
-            <span class="ml-4 text-gray-400">正在加載 Subnet 數據...</span>
+            <span class="ml-4 text-gray-400">Loading subnet data...</span>
         </div>
 
         <div id="subnets-container" class="hidden mb-8">
@@ -417,7 +417,7 @@
                             </th>
                             <th class="px-3 py-3">
                                 <button class="sortable-header" type="button" data-sort-key="invest_value" aria-sort="descending">
-                                    <span>投資價值</span><span class="sort-icon" aria-hidden="true">↓</span>
+                                    <span>Investment Value</span><span class="sort-icon" aria-hidden="true">↓</span>
                                 </button>
                             </th>
                             <th class="px-3 py-3">
@@ -461,13 +461,13 @@
 
         <!-- 錯誤提示 -->
         <div id="error-container" class="hidden bg-red-900/20 border border-red-500 rounded-lg p-4 mb-8">
-            <div class="text-red-400 font-medium">錯誤</div>
+            <div class="text-red-400 font-medium">Error</div>
             <div class="text-red-300 text-sm" id="error-message"></div>
         </div>
 
         <!-- 沒有數據提示 -->
         <div id="no-data-container" class="hidden bg-slate-800 rounded-lg p-12 text-center border border-slate-700">
-            <div class="text-gray-400 text-lg">沒有符合條件的 Subnet</div>
+            <div class="text-gray-400 text-lg">No matching subnets</div>
         </div>
             </main>
         </div>
@@ -475,8 +475,8 @@
 
     <!-- 頁腳 -->
     <footer class="border-t border-slate-700 mt-12 py-6 text-center text-gray-400 text-sm">
-        <p>💡 投資價值 = 70% Incentive 分佈均勻性 + 30% Incentive &gt; 0 miner 覆蓋率</p>
-        <p class="mt-2">🔒 Phase 2: SSH 和 RunPod 一鍵部署功能開發中</p>
+        <p>💡 Investment value = 70% incentive distribution uniformity + 30% incentive &gt; 0 miner coverage</p>
+        <p class="mt-2">🔒 Phase 2: SSH and RunPod one-click deployment features are in development</p>
     </footer>
 
     <script>
@@ -534,20 +534,20 @@
 
             shell.classList.toggle('settings-collapsed', !isOpen);
             toggle.setAttribute('aria-expanded', String(isOpen));
-            toggle.setAttribute('aria-label', isOpen ? '收合設定選單' : '展開設定選單');
+            toggle.setAttribute('aria-label', isOpen ? 'Collapse settings menu' : 'Expand settings menu');
             icon.textContent = isOpen ? '‹' : '›';
         }
 
         // 停止網站程序
         async function stopWebsite() {
-            const confirmed = window.confirm('確定要停止 Website？這會關閉目前的 server process 和它的 background threads。');
+            const confirmed = window.confirm('Are you sure you want to stop the website? This will shut down the current server process and its background threads.');
             if (!confirmed) return;
 
             const button = document.getElementById('stop-website-btn');
             const status = document.getElementById('stop-website-status');
             button.disabled = true;
-            button.textContent = '⏹ 停止中...';
-            status.textContent = '正在送出停止請求...';
+            button.textContent = '⏹ Stopping...';
+            status.textContent = 'Sending stop request...';
 
             try {
                 const response = await fetch('/api/website/stop', { method: 'POST' });
@@ -555,12 +555,12 @@
                     throw new Error(`HTTP error! status: ${response.status}`);
                 }
 
-                status.textContent = '停止請求已送出，Website 即將關閉。';
+                status.textContent = 'Stop request sent. The website will shut down shortly.';
             } catch (error) {
                 console.error('停止網站失敗:', error);
                 button.disabled = false;
-                button.textContent = '⏹ 停止 Website';
-                status.textContent = `停止失敗: ${error.message}`;
+                button.textContent = '⏹ Stop Website';
+                status.textContent = `Stop failed: ${error.message}`;
             }
         }
 
@@ -675,7 +675,7 @@
                                 updateStatsDisplay();
                                 console.log('所有數據加載完成');
                             } else if (message.type === 'error') {
-                                showError(`加載錯誤: ${message.message}`);
+                                showError(`Load error: ${message.message}`);
                             }
                         } catch (e) {
                             console.warn('解析消息失敗:', line, e);
@@ -687,7 +687,7 @@
 
             } catch (error) {
                 console.error('錯誤:', error);
-                showError(`無法加載數據: ${error.message}`);
+                showError(`Unable to load data: ${error.message}`);
                 showLoading(false);
             }
         }
@@ -923,11 +923,11 @@
 
         // 獲取投資質量文本
         function getInvestQuality(value) {
-            if (value >= 0.8) return '🟢 優秀 (低風險)';
-            if (value >= 0.6) return '🟢 良好 (中低風險)';
-            if (value >= 0.4) return '🟡 中等 (中風險)';
-            if (value >= 0.2) return '🟠 偏低 (中高風險)';
-            return '🔴 較低 (高風險)';
+            if (value >= 0.8) return '🟢 Excellent (Low Risk)';
+            if (value >= 0.6) return '🟢 Good (Medium-Low Risk)';
+            if (value >= 0.4) return '🟡 Medium (Medium Risk)';
+            if (value >= 0.2) return '🟠 Low (Medium-High Risk)';
+            return '🔴 Very Low (High Risk)';
         }
 
         // 格式化 TAO
@@ -986,7 +986,7 @@
         // 更新時間
         function updateTime() {
             const now = new Date();
-            document.getElementById('update-time').textContent = now.toLocaleTimeString('zh-TW');
+            document.getElementById('update-time').textContent = now.toLocaleTimeString('en-US');
         }
     </script>
 </body>

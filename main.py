@@ -102,6 +102,16 @@ CACHE_TTL_BASIC = 86400  # 基本信息快取時間：24小時（不變化的數
 CACHE_TTL_METAGRAPH = 3600  # metagraph 快取時間：60分鐘（動態數據）
 CACHE_TTL_SNAPSHOT = 3600  # 整頁 subnet 列表快取時間：60分鐘
 SUBNETS_SNAPSHOT_CACHE_KEY = f"subnets_snapshot:{NETWORK}"
+SUBNET_METRICS_CACHE_PREFIX = "subnet_metrics"
+SUBNET_METRICS_REQUIRED_FIELDS = (
+    'invest_value',
+    'registration_cost',
+    'n_miners',
+    'active_incentive_miners',
+    'total_stake',
+    'total_emissions',
+    'incentive_mean',
+)
 
 # 初始化 Redis 連接
 try:
@@ -314,6 +324,70 @@ def get_cached_metagraph_metrics(netuid: int) -> Optional[Dict]:
         return None
 
 
+def get_subnet_metrics_cache_key(netuid: int) -> str:
+    return f"{SUBNET_METRICS_CACHE_PREFIX}:{netuid}"
+
+
+def get_cached_subnet_metrics(netuid: int) -> Optional[Dict]:
+    """讀取已計算完成、可直接供 UI 使用的 subnet 指標快取。"""
+    cached_data = get_from_cache(get_subnet_metrics_cache_key(netuid))
+    if not isinstance(cached_data, dict):
+        return None
+
+    missing_fields = [
+        field for field in SUBNET_METRICS_REQUIRED_FIELDS
+        if field not in cached_data
+    ]
+    if missing_fields:
+        logger.info(f"Subnet {netuid} UI 指標快取缺少欄位 {missing_fields}，忽略舊快取")
+        return None
+
+    return cached_data
+
+
+def set_cached_subnet_metrics(subnet: Dict) -> None:
+    """保存 UI 顯示所需的 per-subnet 指標，避免每次只靠 raw metagraph 重算。"""
+    if subnet.get('is_partial'):
+        return
+
+    netuid = subnet.get('netuid')
+    if netuid is None:
+        return
+
+    missing_fields = [
+        field for field in SUBNET_METRICS_REQUIRED_FIELDS
+        if field not in subnet
+    ]
+    if missing_fields:
+        logger.warning(f"Subnet {netuid} UI 指標快取寫入略過，缺少欄位: {missing_fields}")
+        return
+
+    cached_record = {
+        'netuid': int(netuid),
+        'name': subnet.get('name', 'N/A'),
+        'owner': subnet.get('owner', 'N/A'),
+        'is_partial': False,
+        'created_at': time.time(),
+    }
+    for field in SUBNET_METRICS_REQUIRED_FIELDS:
+        cached_record[field] = subnet.get(field)
+
+    for optional_field in (
+        'n_total_uids',
+        'n_validators',
+        'incentive_active_ratio',
+        'incentive_std',
+    ):
+        if optional_field in subnet:
+            cached_record[optional_field] = subnet.get(optional_field)
+
+    set_to_cache(
+        get_subnet_metrics_cache_key(int(netuid)),
+        cached_record,
+        ttl=CACHE_TTL_METAGRAPH
+    )
+
+
 def get_cached_subnets_snapshot() -> Optional[List[Dict]]:
     """讀取整頁 subnet 快取，讓瀏覽器 refresh 不必先重建每個 subnet。"""
     cached_data = get_from_cache(SUBNETS_SNAPSHOT_CACHE_KEY)
@@ -332,6 +406,9 @@ def set_cached_subnets_snapshot(subnets: List[Dict]) -> None:
     complete_subnets = [subnet for subnet in subnets if not subnet.get('is_partial')]
     if not complete_subnets:
         return
+
+    for subnet in complete_subnets:
+        set_cached_subnet_metrics(subnet)
 
     snapshot = {
         'created_at': time.time(),
@@ -470,6 +547,10 @@ async def get_subnet_info_async(subtensor: bt.Subtensor, netuid: int) -> Dict:
 async def process_single_subnet_fast(subtensor: bt.Subtensor, netuid: int) -> Optional[Dict]:
     """快速獲取subnet的基本數據（不包含metagraph）"""
     try:
+        cached_subnet_metrics = get_cached_subnet_metrics(netuid)
+        if cached_subnet_metrics is not None:
+            return cached_subnet_metrics
+
         cached_metrics = get_cached_metagraph_metrics(netuid)
 
         # 快速獲取基本信息
@@ -531,6 +612,10 @@ async def process_single_subnet_metagraph(subtensor: bt.Subtensor, netuid: int) 
 async def process_single_subnet(subtensor: bt.Subtensor, netuid: int) -> Optional[Dict]:
     """處理單個subnet的所有數據（並行）"""
     try:
+        cached_subnet_metrics = get_cached_subnet_metrics(netuid)
+        if cached_subnet_metrics is not None:
+            return cached_subnet_metrics
+
         # 並行獲取所有信息
         metagraph_data, reg_cost, subnet_info = await asyncio.gather(
             get_metagraph_data_async(subtensor, netuid),
@@ -544,13 +629,16 @@ async def process_single_subnet(subtensor: bt.Subtensor, netuid: int) -> Optiona
         
         metrics = build_metagraph_metrics(metagraph_data)
         
-        return {
+        subnet_data = {
             'netuid': netuid,
             'name': subnet_info.get('name', 'N/A'),
             'registration_cost': float(reg_cost) if reg_cost else 0.0,
             **metrics,
             'owner': subnet_info.get('owner', 'N/A'),
         }
+        set_cached_subnet_metrics(subnet_data)
+
+        return subnet_data
         
     except Exception as e:
         logger.error(f"處理Subnet {netuid}時出錯: {e}")
@@ -766,6 +854,7 @@ async def generate_subnets_stream(min_invest_value: float, max_invest_value: flo
                         **subnet_results_by_netuid.get(result['netuid'], {}),
                         **result
                     }
+                    set_cached_subnet_metrics(subnet_results_by_netuid[result['netuid']])
                     yield json.dumps({"type": "subnet_update", "data": result}) + "\n"
                     update_count += 1
             except Exception as e:
@@ -899,6 +988,7 @@ async def cache_status():
         metagraph_keys = len(redis_client.keys("metagraph:*"))
         reg_cost_keys = len(redis_client.keys("reg_cost:*"))
         subnet_info_keys = len(redis_client.keys("subnet_info:*"))
+        subnet_metrics_keys = len(redis_client.keys(f"{SUBNET_METRICS_CACHE_PREFIX}:*"))
         snapshot_keys = len(redis_client.keys("subnets_snapshot:*"))
         
         return JSONResponse({
@@ -907,11 +997,13 @@ async def cache_status():
             "metagraph_cached": metagraph_keys,
             "registration_cost_cached": reg_cost_keys,
             "subnet_info_cached": subnet_info_keys,
+            "subnet_metrics_cached": subnet_metrics_keys,
             "subnets_snapshot_cached": snapshot_keys,
             "memory_used": info.get('used_memory_human', 'N/A'),
             "ttl_config": {
                 "basic_info": CACHE_TTL_BASIC,
                 "metagraph": CACHE_TTL_METAGRAPH,
+                "subnet_metrics": CACHE_TTL_METAGRAPH,
                 "subnets_snapshot": CACHE_TTL_SNAPSHOT
             }
         })
@@ -963,6 +1055,7 @@ async def clear_subnet_cache(netuid: int):
             f"metagraph:{netuid}",
             f"reg_cost:{netuid}",
             f"subnet_info:{netuid}",
+            get_subnet_metrics_cache_key(netuid),
             SUBNETS_SNAPSHOT_CACHE_KEY
         ]
         total_cleared = 0
