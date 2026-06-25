@@ -628,13 +628,14 @@ async def process_single_subnet(subtensor: bt.Subtensor, netuid: int) -> Optiona
             return None
         
         metrics = build_metagraph_metrics(metagraph_data)
+        subnet_info_data = subnet_info if isinstance(subnet_info, dict) else {}
         
         subnet_data = {
             'netuid': netuid,
-            'name': subnet_info.get('name', 'N/A'),
+            'name': subnet_info_data.get('name', 'N/A'),
             'registration_cost': float(reg_cost) if reg_cost else 0.0,
             **metrics,
-            'owner': subnet_info.get('owner', 'N/A'),
+            'owner': subnet_info_data.get('owner', 'N/A'),
         }
         set_cached_subnet_metrics(subnet_data)
 
