@@ -16,6 +16,7 @@ import json
 import os
 import redis
 import pickle
+import random
 import re
 import signal
 import subprocess
@@ -98,6 +99,9 @@ logger = logging.getLogger(__name__)
 NETWORK = 'finney'
 SUBTENSOR_NETWORK = 'finney'
 MAX_CONCURRENT_REQUESTS = 10  # 同時請求數量限制
+METAGRAPH_RETRY_ATTEMPTS = 3  # WebSocket/限流錯誤重試次數
+METAGRAPH_RETRY_BASE_DELAY = 1.5  # metagraph 重試初始等待秒數
+METAGRAPH_RETRY_MAX_DELAY = 12.0  # metagraph 重試最長等待秒數
 
 # Redis 快取配置
 REDIS_HOST = 'localhost'
@@ -119,6 +123,23 @@ SUBNET_METRICS_REQUIRED_FIELDS = (
     'incentive_mean',
     'repo_url',
     'gpu_required',
+)
+
+RETRYABLE_METAGRAPH_ERROR_KEYWORDS = (
+    "websocket",
+    "http 429",
+    "http 500",
+    "http 502",
+    "http 503",
+    "http 504",
+    "too many requests",
+    "rate limit",
+    "connection reset",
+    "connection refused",
+    "connection closed",
+    "temporarily unavailable",
+    "timed out",
+    "timeout",
 )
 
 # 初始化 Redis 連接
@@ -601,6 +622,22 @@ def set_cached_subnets_snapshot(subnets: List[Dict]) -> None:
     set_to_cache(SUBNETS_SNAPSHOT_CACHE_KEY, snapshot, ttl=CACHE_TTL_SNAPSHOT)
 
 
+def is_retryable_metagraph_error(error: Exception) -> bool:
+    """判斷 metagraph 抓取錯誤是否像暫時性 WebSocket/限流問題。"""
+    error_text = f"{type(error).__name__}: {error}".lower()
+
+    status_code = getattr(error, "status_code", None)
+    if status_code in {429, 500, 502, 503, 504}:
+        return True
+
+    response = getattr(error, "response", None)
+    response_status = getattr(response, "status_code", None) or getattr(response, "status", None)
+    if response_status in {429, 500, 502, 503, 504}:
+        return True
+
+    return any(keyword in error_text for keyword in RETRYABLE_METAGRAPH_ERROR_KEYWORDS)
+
+
 async def get_subtensor_async() -> bt.Subtensor:
     """連接到Subtensor網絡（異步）"""
     try:
@@ -623,16 +660,39 @@ async def get_metagraph_data_async(subtensor: bt.Subtensor, netuid: int) -> Opti
             logger.info(f"✓ Subnet {netuid} metagraph 從快取讀取")
             return cached_data
     
+    metagraph = None
+    for attempt in range(1, METAGRAPH_RETRY_ATTEMPTS + 1):
+        try:
+            logger.info(f"開始獲取Subnet {netuid}的metagraph... (attempt {attempt}/{METAGRAPH_RETRY_ATTEMPTS})")
+            # bt.Metagraph is synchronous/blocking. Run it in a worker thread so
+            # asyncio.gather/as_completed can fetch multiple subnets concurrently.
+            metagraph = await asyncio.to_thread(
+                bt.Metagraph,
+                netuid=netuid,
+                lite=True,
+                network=NETWORK
+            )
+            break
+        except Exception as e:
+            retryable = is_retryable_metagraph_error(e)
+            is_last_attempt = attempt >= METAGRAPH_RETRY_ATTEMPTS
+
+            if not retryable or is_last_attempt:
+                logger.error(f"無法獲取Subnet {netuid}的metagraph: {type(e).__name__}: {e}", exc_info=True)
+                return None
+
+            delay = min(METAGRAPH_RETRY_BASE_DELAY * (2 ** (attempt - 1)), METAGRAPH_RETRY_MAX_DELAY)
+            delay += random.uniform(0, 0.5)
+            logger.warning(
+                f"Subnet {netuid} metagraph 暫時性錯誤，{delay:.1f}秒後重試 "
+                f"({attempt}/{METAGRAPH_RETRY_ATTEMPTS}): {type(e).__name__}: {e}"
+            )
+            await asyncio.sleep(delay)
+
+    if metagraph is None:
+        return None
+
     try:
-        logger.info(f"開始獲取Subnet {netuid}的metagraph...")
-        # bt.Metagraph is synchronous/blocking. Run it in a worker thread so
-        # asyncio.gather/as_completed can fetch multiple subnets concurrently.
-        metagraph = await asyncio.to_thread(
-            bt.Metagraph,
-            netuid=netuid,
-            lite=True,
-            network=NETWORK
-        )
         logger.info(f"成功獲取Subnet {netuid}的metagraph，有{len(metagraph.hotkeys)}個hotkeys")
 
 
