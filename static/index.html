@@ -555,7 +555,9 @@
         // 設置事件監聽器
         function setupEventListeners() {
             document.getElementById('settings-toggle').addEventListener('click', toggleSettingsMenu);
-            document.getElementById('load-data-btn').addEventListener('click', loadSubnets);
+            document.getElementById('load-data-btn').addEventListener('click', () => {
+                loadSubnets({ refreshSubnetList: true });
+            });
             document.getElementById('export-btn').addEventListener('click', exportData);
             document.getElementById('stop-website-btn').addEventListener('click', stopWebsite);
             document.getElementById('min-invest-value-input').addEventListener('change', updateFilter);
@@ -645,7 +647,7 @@
         }
 
         // 加載 Subnet 數據（流式）
-        async function loadSubnets() {
+        async function loadSubnets({ refreshSubnetList = false } = {}) {
             try {
                 showLoading(true);
                 hideError();
@@ -657,9 +659,15 @@
                 const minValue = parseFloat(document.getElementById('min-invest-value-input').value);
                 const maxValue = parseFloat(document.getElementById('max-invest-value-input').value);
 
-                const response = await fetch(
-                    `/api/subnets-stream?min_invest_value=${minValue}&max_invest_value=${maxValue}`
-                );
+                const params = new URLSearchParams({
+                    min_invest_value: minValue,
+                    max_invest_value: maxValue,
+                });
+                if (refreshSubnetList) {
+                    params.set('refresh_subnet_list', 'true');
+                }
+
+                const response = await fetch(`/api/subnets-stream?${params.toString()}`);
 
                 if (!response.ok) {
                     throw new Error(`HTTP error! status: ${response.status}`);

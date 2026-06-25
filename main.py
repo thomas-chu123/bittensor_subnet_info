@@ -626,13 +626,25 @@ def get_cached_subnets_snapshot() -> Optional[List[Dict]]:
     return get_cached_memory_subnets_snapshot()
 
 
-def set_cached_subnets_snapshot(subnets: List[Dict]) -> None:
+def set_cached_subnets_snapshot(subnets: List[Dict], expected_netuids: Optional[List[int]] = None) -> None:
     """保存整頁 subnet 結果，供下一次 browser refresh 優先使用。"""
     global subnets_snapshot_memory_cache
 
     complete_subnets = [subnet for subnet in subnets if not subnet.get('is_partial')]
     if not complete_subnets:
         return
+
+    if expected_netuids is not None:
+        complete_netuids = {int(subnet['netuid']) for subnet in complete_subnets if 'netuid' in subnet}
+        expected_netuid_set = {int(netuid) for netuid in expected_netuids}
+        missing_netuids = sorted(expected_netuid_set - complete_netuids)
+        if missing_netuids:
+            logger.warning(
+                "整頁 subnet snapshot 寫入略過：缺少 %s 個 netuid，範例: %s",
+                len(missing_netuids),
+                missing_netuids[:10],
+            )
+            return
 
     for subnet in complete_subnets:
         set_cached_subnet_metrics(subnet)
@@ -654,6 +666,30 @@ def clear_memory_subnets_snapshot() -> bool:
     return had_snapshot
 
 
+def clear_subnets_snapshot_cache() -> Dict:
+    """只清整頁 subnet snapshot；保留各 subnet 的 metagraph 與指標快取。"""
+    memory_snapshot_cleared = clear_memory_subnets_snapshot()
+    redis_cleared = 0
+
+    if REDIS_ENABLED:
+        redis_cleared = clear_cache(SUBNETS_SNAPSHOT_CACHE_KEY)
+
+    return {
+        "memory_snapshot_cleared": memory_snapshot_cleared,
+        "redis_snapshot_cleared": redis_cleared,
+    }
+
+
+def get_subnet_netuids(subtensor: bt.Subtensor) -> List[int]:
+    """從鏈上讀取目前存在的 subnet netuid 清單。"""
+    all_subnets = subtensor.get_all_subnets_info()
+
+    if isinstance(all_subnets, list):
+        return [subnet.netuid for subnet in all_subnets] if all_subnets else []
+
+    return list(all_subnets.keys()) if all_subnets else []
+
+
 async def rebuild_subnets_snapshot(reason: str) -> List[Dict]:
     """建立完整 subnet snapshot，供啟動預熱與 API 冷路徑共用。"""
     cached_snapshot = get_cached_subnets_snapshot()
@@ -669,8 +705,9 @@ async def rebuild_subnets_snapshot(reason: str) -> List[Dict]:
 
         logger.info(f"開始建立整頁 subnet snapshot ({reason})")
         subtensor = await get_subtensor_async()
-        subnet_data_list = await get_all_subnets_data_async(subtensor)
-        set_cached_subnets_snapshot(subnet_data_list)
+        subnet_netuids = get_subnet_netuids(subtensor)
+        subnet_data_list = await get_all_subnets_data_async(subtensor, subnet_netuids)
+        set_cached_subnets_snapshot(subnet_data_list, expected_netuids=subnet_netuids)
         logger.info(f"整頁 subnet snapshot 建立完成 ({reason})，共 {len(subnet_data_list)} 筆")
         return subnet_data_list
 
@@ -990,12 +1027,7 @@ async def get_all_subnets_data_stream(subtensor: bt.Subtensor, min_invest_value:
     """流式獲取所有subnet的數據，一次一個"""
     try:
         # 獲取所有subnet列表
-        all_subnets = subtensor.get_all_subnets_info()
-        
-        if isinstance(all_subnets, list):
-            subnet_netuids = [subnet.netuid for subnet in all_subnets] if all_subnets else []
-        else:
-            subnet_netuids = list(all_subnets.keys()) if all_subnets else []
+        subnet_netuids = get_subnet_netuids(subtensor)
         
         logger.info(f"找到 {len(subnet_netuids)} 個subnet")
         
@@ -1024,16 +1056,12 @@ async def get_all_subnets_data_stream(subtensor: bt.Subtensor, min_invest_value:
         logger.error(f"無法獲取subnet列表: {e}")
 
 
-async def get_all_subnets_data_async(subtensor: bt.Subtensor) -> List[Dict]:
+async def get_all_subnets_data_async(subtensor: bt.Subtensor, subnet_netuids: Optional[List[int]] = None) -> List[Dict]:
     """並行獲取所有subnet的數據"""
     try:
         # 獲取所有subnet列表
-        all_subnets = subtensor.get_all_subnets_info()
-        
-        if isinstance(all_subnets, list):
-            subnet_netuids = [subnet.netuid for subnet in all_subnets] if all_subnets else []
-        else:
-            subnet_netuids = list(all_subnets.keys()) if all_subnets else []
+        if subnet_netuids is None:
+            subnet_netuids = get_subnet_netuids(subtensor)
         
         logger.info(f"找到 {len(subnet_netuids)} 個subnet")
         
@@ -1078,9 +1106,16 @@ async def get_index():
 
 
 @app.get("/api/subnets")
-async def get_subnets(min_invest_value: float = 0.0, max_invest_value: float = 1.0):
+async def get_subnets(
+    min_invest_value: float = 0.0,
+    max_invest_value: float = 1.0,
+    refresh_subnet_list: bool = False,
+):
     """獲取所有subnet數據（支持過濾）"""
     try:
+        if refresh_subnet_list:
+            clear_subnets_snapshot_cache()
+
         cached_snapshot = get_cached_subnets_snapshot()
         if cached_snapshot is not None:
             subnet_data_list = cached_snapshot
@@ -1107,9 +1142,17 @@ async def get_subnets(min_invest_value: float = 0.0, max_invest_value: float = 1
         raise HTTPException(status_code=500, detail=str(e))
 
 
-async def generate_subnets_stream(min_invest_value: float, max_invest_value: float):
+async def generate_subnets_stream(min_invest_value: float, max_invest_value: float, refresh_subnet_list: bool = False):
     """生成流式subnet數據：分兩階段，先基本信息，再metagraph數據"""
     try:
+        if refresh_subnet_list:
+            cleared = clear_subnets_snapshot_cache()
+            logger.info(
+                "手動重新讀取 subnet list，已清除整頁 snapshot: memory=%s redis=%s",
+                cleared["memory_snapshot_cleared"],
+                cleared["redis_snapshot_cleared"],
+            )
+
         cached_snapshot = get_cached_subnets_snapshot()
         if cached_snapshot is not None:
             logger.info(f"✓ 從整頁快取讀取 {len(cached_snapshot)} 個subnets")
@@ -1138,11 +1181,7 @@ async def generate_subnets_stream(min_invest_value: float, max_invest_value: flo
         subtensor = await get_subtensor_async()
         
         # 立即發送總subnet數
-        all_subnets = subtensor.get_all_subnets_info()
-        if isinstance(all_subnets, list):
-            subnet_netuids = [subnet.netuid for subnet in all_subnets] if all_subnets else []
-        else:
-            subnet_netuids = list(all_subnets.keys()) if all_subnets else []
+        subnet_netuids = get_subnet_netuids(subtensor)
         
         logger.info(f"找到{len(subnet_netuids)}個subnets，開始兩階段流式傳輸")
         yield json.dumps({"type": "total", "count": len(subnet_netuids)}) + "\n"
@@ -1198,7 +1237,10 @@ async def generate_subnets_stream(min_invest_value: float, max_invest_value: flo
                 logger.warning(f"獲取metagraph更新時出錯: {e}")
         
         logger.info(f"metagraph數據獲取完成：{update_count}個更新")
-        set_cached_subnets_snapshot(list(subnet_results_by_netuid.values()))
+        set_cached_subnets_snapshot(
+            list(subnet_results_by_netuid.values()),
+            expected_netuids=subnet_netuids,
+        )
         
         # 發送完成信號
         yield json.dumps({"type": "complete", "basic": basic_count, "updated": update_count}) + "\n"
@@ -1209,10 +1251,14 @@ async def generate_subnets_stream(min_invest_value: float, max_invest_value: flo
 
 
 @app.get("/api/subnets-stream")
-async def stream_subnets(min_invest_value: float = 0.0, max_invest_value: float = 1.0):
+async def stream_subnets(
+    min_invest_value: float = 0.0,
+    max_invest_value: float = 1.0,
+    refresh_subnet_list: bool = False,
+):
     """流式獲取subnet數據（逐個返回）"""
     return StreamingResponse(
-        generate_subnets_stream(min_invest_value, max_invest_value),
+        generate_subnets_stream(min_invest_value, max_invest_value, refresh_subnet_list),
         media_type="application/x-ndjson"
     )
 
