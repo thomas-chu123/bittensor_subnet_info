@@ -466,19 +466,34 @@ def build_metagraph_metrics(metagraph_data: Dict) -> Dict:
 
     netuid = metagraph_data.get('netuid')
     incentives = np.array(metagraph_data['incentives'])
-    has_incentives = len(incentives) > 0
-    active_incentive_miners = int(np.count_nonzero(incentives > 0)) if has_incentives else 0
     total_uids = int(metagraph_data.get('n', len(metagraph_data.get('hotkeys', []))))
     validator_permits = np.array(metagraph_data.get('validator_permit', []), dtype=bool)
     validator_count = int(np.count_nonzero(validator_permits)) if len(validator_permits) > 0 else 0
     miner_count = max(total_uids - validator_count, 0)
-    invest_details = calculate_invest_value_details(incentives)
-    incentive_mean = float(np.mean(incentives)) if has_incentives else None
-    incentive_std = float(np.std(incentives)) if has_incentives else None
+
+    if len(validator_permits) == len(incentives):
+        miner_incentives = incentives[~validator_permits]
+    else:
+        logger.warning(
+            "Subnet %s metagraph 長度不一致，無法用 validator_permit 篩選 incentive: "
+            "validator_permit=%s incentives=%s total_uids=%s",
+            netuid,
+            len(validator_permits),
+            len(incentives),
+            total_uids,
+        )
+        miner_incentives = incentives
+
+    has_miner_incentives = len(miner_incentives) > 0
+    active_incentive_miners = int(np.count_nonzero(miner_incentives > 0)) if has_miner_incentives else 0
+    invest_details = calculate_invest_value_details(miner_incentives)
+    incentive_mean = float(np.mean(miner_incentives)) if has_miner_incentives else None
+    incentive_std = float(np.std(miner_incentives)) if has_miner_incentives else None
     logger.info(
         "投資價值計算 netuid=%s invest_value=%.6f formula=(0.7*distribution_score)+(0.3*active_ratio) "
         "distribution_score=%.6f gini=%.6f active_ratio=%.6f active_incentive_miners=%s "
-        "incentive_count=%s total_uids=%s miners=%s validators=%s incentive_mean=%s incentive_std=%s",
+        "miner_incentive_count=%s raw_incentive_count=%s total_uids=%s miners=%s validators=%s "
+        "incentive_mean=%s incentive_std=%s",
         netuid,
         invest_details['invest_value'],
         invest_details['distribution_score'],
@@ -486,6 +501,7 @@ def build_metagraph_metrics(metagraph_data: Dict) -> Dict:
         invest_details['active_ratio'],
         active_incentive_miners,
         invest_details['total_count'],
+        len(incentives),
         total_uids,
         miner_count,
         validator_count,
