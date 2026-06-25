@@ -155,6 +155,9 @@ except Exception as e:
 
 # ==================== FastAPI 應用 ====================
 app = FastAPI(title="Bittensor Subnet Info", description="Subnet 分析儀表盤")
+subnets_snapshot_warmup_task: Optional[asyncio.Task] = None
+subnets_snapshot_warmup_lock = asyncio.Lock()
+subnets_snapshot_memory_cache: Optional[Dict] = None
 
 
 def _terminate_child_processes() -> int:
@@ -581,9 +584,7 @@ def set_cached_subnet_metrics(subnet: Dict) -> None:
     )
 
 
-def get_cached_subnets_snapshot() -> Optional[List[Dict]]:
-    """讀取整頁 subnet 快取，讓瀏覽器 refresh 不必先重建每個 subnet。"""
-    cached_data = get_from_cache(SUBNETS_SNAPSHOT_CACHE_KEY)
+def extract_valid_subnets_snapshot(cached_data: Optional[Dict]) -> Optional[List[Dict]]:
     if not isinstance(cached_data, dict):
         return None
 
@@ -605,8 +606,30 @@ def get_cached_subnets_snapshot() -> Optional[List[Dict]]:
     return data
 
 
+def get_cached_memory_subnets_snapshot() -> Optional[List[Dict]]:
+    if subnets_snapshot_memory_cache is None:
+        return None
+
+    created_at = subnets_snapshot_memory_cache.get('created_at')
+    if not isinstance(created_at, (int, float)) or time.time() - created_at > CACHE_TTL_SNAPSHOT:
+        return None
+
+    return extract_valid_subnets_snapshot(subnets_snapshot_memory_cache)
+
+
+def get_cached_subnets_snapshot() -> Optional[List[Dict]]:
+    """讀取整頁 subnet 快取，讓瀏覽器 refresh 不必先重建每個 subnet。"""
+    cached_snapshot = extract_valid_subnets_snapshot(get_from_cache(SUBNETS_SNAPSHOT_CACHE_KEY))
+    if cached_snapshot is not None:
+        return cached_snapshot
+
+    return get_cached_memory_subnets_snapshot()
+
+
 def set_cached_subnets_snapshot(subnets: List[Dict]) -> None:
     """保存整頁 subnet 結果，供下一次 browser refresh 優先使用。"""
+    global subnets_snapshot_memory_cache
+
     complete_subnets = [subnet for subnet in subnets if not subnet.get('is_partial')]
     if not complete_subnets:
         return
@@ -619,7 +642,73 @@ def set_cached_subnets_snapshot(subnets: List[Dict]) -> None:
         'total_subnets': len(complete_subnets),
         'data': sorted(complete_subnets, key=lambda subnet: subnet['netuid'])
     }
+    subnets_snapshot_memory_cache = snapshot
     set_to_cache(SUBNETS_SNAPSHOT_CACHE_KEY, snapshot, ttl=CACHE_TTL_SNAPSHOT)
+
+
+def clear_memory_subnets_snapshot() -> bool:
+    global subnets_snapshot_memory_cache
+
+    had_snapshot = subnets_snapshot_memory_cache is not None
+    subnets_snapshot_memory_cache = None
+    return had_snapshot
+
+
+async def rebuild_subnets_snapshot(reason: str) -> List[Dict]:
+    """建立完整 subnet snapshot，供啟動預熱與 API 冷路徑共用。"""
+    cached_snapshot = get_cached_subnets_snapshot()
+    if cached_snapshot is not None:
+        logger.info(f"✓ 整頁 subnet 快取已存在，略過重建 ({reason})")
+        return cached_snapshot
+
+    async with subnets_snapshot_warmup_lock:
+        cached_snapshot = get_cached_subnets_snapshot()
+        if cached_snapshot is not None:
+            logger.info(f"✓ 整頁 subnet 快取已由其他任務建立 ({reason})")
+            return cached_snapshot
+
+        logger.info(f"開始建立整頁 subnet snapshot ({reason})")
+        subtensor = await get_subtensor_async()
+        subnet_data_list = await get_all_subnets_data_async(subtensor)
+        set_cached_subnets_snapshot(subnet_data_list)
+        logger.info(f"整頁 subnet snapshot 建立完成 ({reason})，共 {len(subnet_data_list)} 筆")
+        return subnet_data_list
+
+
+async def warm_subnets_snapshot_on_startup() -> None:
+    """uvicorn 啟動後在背景預先建立 snapshot，降低第一位使用者等待時間。"""
+    try:
+        await rebuild_subnets_snapshot("startup")
+    except asyncio.CancelledError:
+        logger.info("啟動 subnet snapshot 預熱已取消")
+        raise
+    except Exception as e:
+        logger.error(f"啟動 subnet snapshot 預熱失敗: {type(e).__name__}: {e}", exc_info=True)
+
+
+@app.on_event("startup")
+async def start_subnets_snapshot_warmup() -> None:
+    global subnets_snapshot_warmup_task
+
+    if os.getenv("PREWARM_SUBNETS_ON_STARTUP", "1").lower() in {"0", "false", "no"}:
+        logger.info("啟動 subnet snapshot 預熱已停用")
+        return
+
+    if subnets_snapshot_warmup_task is None or subnets_snapshot_warmup_task.done():
+        subnets_snapshot_warmup_task = asyncio.create_task(warm_subnets_snapshot_on_startup())
+        logger.info("已建立啟動 subnet snapshot 背景預熱任務")
+
+
+@app.on_event("shutdown")
+async def stop_subnets_snapshot_warmup() -> None:
+    if subnets_snapshot_warmup_task is None or subnets_snapshot_warmup_task.done():
+        return
+
+    subnets_snapshot_warmup_task.cancel()
+    try:
+        await subnets_snapshot_warmup_task
+    except asyncio.CancelledError:
+        pass
 
 
 def is_retryable_metagraph_error(error: Exception) -> bool:
@@ -996,11 +1085,7 @@ async def get_subnets(min_invest_value: float = 0.0, max_invest_value: float = 1
         if cached_snapshot is not None:
             subnet_data_list = cached_snapshot
         else:
-            subtensor = await get_subtensor_async()
-
-            # 並行獲取所有subnet數據
-            subnet_data_list = await get_all_subnets_data_async(subtensor)
-            set_cached_subnets_snapshot(subnet_data_list)
+            subnet_data_list = await rebuild_subnets_snapshot("api/subnets")
         
         # 過濾投資價值
         filtered_subnets = [
@@ -1226,10 +1311,14 @@ async def diagnostic():
 @app.get("/api/cache/status")
 async def cache_status():
     """查看快取狀態"""
+    memory_snapshot = get_cached_memory_subnets_snapshot()
+
     if not REDIS_ENABLED:
         return JSONResponse({
             "enabled": False,
-            "message": "Redis 未啟用"
+            "message": "Redis 未啟用",
+            "memory_subnets_snapshot_cached": 1 if memory_snapshot is not None else 0,
+            "memory_subnets_snapshot_count": len(memory_snapshot) if memory_snapshot is not None else 0,
         })
     
     try:
@@ -1253,6 +1342,8 @@ async def cache_status():
             "repo_metadata_cached": repo_metadata_keys,
             "subnet_metrics_cached": subnet_metrics_keys,
             "subnets_snapshot_cached": snapshot_keys,
+            "memory_subnets_snapshot_cached": 1 if memory_snapshot is not None else 0,
+            "memory_subnets_snapshot_count": len(memory_snapshot) if memory_snapshot is not None else 0,
             "memory_used": info.get('used_memory_human', 'N/A'),
             "ttl_config": {
                 "basic_info": CACHE_TTL_BASIC,
@@ -1272,10 +1363,16 @@ async def cache_status():
 @app.post("/api/cache/clear")
 async def clear_all_cache(pattern: str = "*"):
     """清除快取"""
+    memory_snapshot_cleared = False
+    if pattern in {"*", SUBNETS_SNAPSHOT_CACHE_KEY, "subnets_snapshot:*"}:
+        memory_snapshot_cleared = clear_memory_subnets_snapshot()
+
     if not REDIS_ENABLED:
         return JSONResponse({
             "enabled": False,
-            "message": "Redis 未啟用"
+            "success": True,
+            "message": "Redis 未啟用，已處理程序內 snapshot 快取",
+            "memory_snapshot_cleared": memory_snapshot_cleared,
         })
     
     try:
@@ -1284,7 +1381,8 @@ async def clear_all_cache(pattern: str = "*"):
         return JSONResponse({
             "success": True,
             "cleared_count": cleared,
-            "pattern": pattern
+            "pattern": pattern,
+            "memory_snapshot_cleared": memory_snapshot_cleared,
         })
     except Exception as e:
         logger.error(f"清除快取失敗: {e}")
@@ -1297,10 +1395,14 @@ async def clear_all_cache(pattern: str = "*"):
 @app.post("/api/cache/clear-subnet/{netuid}")
 async def clear_subnet_cache(netuid: int):
     """清除特定subnet的快取"""
+    memory_snapshot_cleared = clear_memory_subnets_snapshot()
+
     if not REDIS_ENABLED:
         return JSONResponse({
             "enabled": False,
-            "message": "Redis 未啟用"
+            "success": True,
+            "message": "Redis 未啟用，已處理程序內 snapshot 快取",
+            "memory_snapshot_cleared": memory_snapshot_cleared,
         })
     
     try:
@@ -1324,7 +1426,8 @@ async def clear_subnet_cache(netuid: int):
         return JSONResponse({
             "success": True,
             "netuid": netuid,
-            "cleared_count": total_cleared
+            "cleared_count": total_cleared,
+            "memory_snapshot_cleared": memory_snapshot_cleared,
         })
     except Exception as e:
         logger.error(f"清除 Subnet {netuid} 快取失敗: {e}")
